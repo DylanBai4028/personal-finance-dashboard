@@ -70,12 +70,16 @@ where a.root_type = 'expense'
 group by 1, 2, 3;
 
 -- Monthly income vs. expense totals — Overview grouped bar chart; savings
--- rate is computed client-side from these two figures.
+-- rate is computed client-side from these two figures. Income postings are
+-- stored credit-normal (negative), the opposite convention from expense
+-- postings (positive), which is what lets a transaction's postings actually
+-- balance to zero — flipped here to a positive figure for display, same as
+-- any standard ledger report would.
 create view v_monthly_income_expense as
 select
     date_trunc('month', t.date)::date as month,
     a.root_type,
-    sum(p.amount) as total
+    sum(case when a.root_type = 'income' then -p.amount else p.amount end) as total
 from postings p
 join transactions t on t.id = p.transaction_id
 join accounts a on a.id = p.account_id
