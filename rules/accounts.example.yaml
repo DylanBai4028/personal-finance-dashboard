@@ -1,0 +1,22 @@
+# Same shape as accounts.local.yaml, with fake account numbers. This file is
+# committed and used to categorize the public demo's synthetic seed data —
+# see src/lib/demo_data_generator.py.
+
+accounts:
+  - match:
+      bsb: "012-345"
+      account_number: "1234-56789"
+    name: "Assets:ANZ:AccessAdvantage"
+
+  - match:
+      bsb: "012-345"
+      account_number: "9876-54321"
+    name: "Assets:ANZ:OnlineSaver"
+
+  - match:
+      account_number: "1111-2222-3333-4444"
+    name: "Liabilities:ANZ:FrequentFlyerBlack"
+
+  - match:
+      membership_number: "XXXX-XXXXXX-12345"
+    name: "Liabilities:Amex:Card"
