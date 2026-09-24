@@ -83,3 +83,6 @@ rules:
 - pattern: ONLINE PAYMENT RECEIVED - THANKYOU 8787
   account: Income:Other
   source: llm
+- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 7570
+  account: Income:Other
+  source: llm
