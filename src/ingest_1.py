@@ -86,7 +86,13 @@ def _load_seen_keys(account_name):
     seen = set()
     if not PROCESSED.exists():
         return seen
+    # Only ingest_1.py's own output shape — data/processed/ also holds
+    # categorize_2.py's *.categorized.json and sync_to_supabase_3.py's
+    # _credit_limit_state.json, neither of which has this shape (confirmed
+    # via a real KeyError before this filter existed).
     for json_path in PROCESSED.glob("*.json"):
+        if json_path.name.endswith(".categorized.json") or json_path.name.startswith("_"):
+            continue
         data = json.loads(json_path.read_text())
         if data["account_name"] != account_name:
             continue
@@ -121,7 +127,17 @@ def ingest_all():
         return
 
     for pdf_path in pdf_paths:
-        with pdfplumber.open(pdf_path) as pdf:
+        try:
+            pdf = pdfplumber.open(pdf_path)
+        except Exception as e:
+            # A genuinely corrupted or non-PDF file fails here, before any
+            # of the parsing-specific error handling below even runs —
+            # confirmed by testing with a deliberately garbage file, which
+            # crashed the whole batch before this was caught explicitly.
+            _reject(pdf_path, f"could not open as a PDF: {e}")
+            continue
+
+        with pdf:
             first_page_text = pdf.pages[0].extract_text() or ""
             statement_type = detect.detect(first_page_text)
             if statement_type is None:

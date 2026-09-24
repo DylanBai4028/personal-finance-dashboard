@@ -167,13 +167,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rules", required=True, type=Path)
     args = parser.parse_args()
+    run(args.rules)
 
-    rules = load_rules(args.rules)
+
+def run(rules_path):
+    rules = load_rules(rules_path)
     matchers = load_account_matchers()
     cache = {}
 
+    # Exclude categorize_2's own *.categorized.json output and
+    # sync_to_supabase_3's _credit_limit_state.json — neither is an
+    # ingest_1 statement output, both share this directory.
     statement_files = sorted(PROCESSED.glob("*.json"))
-    statement_files = [f for f in statement_files if not f.name.endswith(".categorized.json")]
+    statement_files = [
+        f for f in statement_files
+        if not f.name.endswith(".categorized.json") and not f.name.startswith("_")
+    ]
 
     for json_path in statement_files:
         out_path = PROCESSED / f"{json_path.stem}.categorized.json"
@@ -185,7 +194,7 @@ def main():
         out_path.write_text(json.dumps({**data, "transactions": categorized}, indent=2))
         print(f"categorized: {json_path.name} ({len(categorized)} transactions)")
 
-    save_rules(args.rules, rules)
+    save_rules(rules_path, rules)
 
 
 if __name__ == "__main__":
