@@ -101,6 +101,8 @@ class SupabaseClient:
 
 
 def root_type_for(account_name):
+    if account_name == "Transfers:Internal":
+        return "transfer"
     prefix = account_name.split(":", 1)[0]
     if prefix not in _ROOT_TYPE_BY_PREFIX:
         raise ValueError(f"unrecognized account name prefix: {account_name!r}")

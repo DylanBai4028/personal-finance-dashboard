@@ -12,12 +12,21 @@ For each transaction, tries in order:
      description within the run so a repeat merchant costs one call, not one
      per transaction.
 
-Writes one balanced posting pair per transaction: the source account (sign
-as ingest_1.py parsed it) and the resolved target (a category or the other
-side of a transfer), which is always the exact negation — every
-transaction's postings sum to zero. Income postings are credit-normal
-(negative); see ledger/schema.sql's v_monthly_income_expense for the
-display-side sign flip.
+Writes one balanced posting pair per transaction: the source account and
+the resolved target (a category or TRANSFERS_ACCOUNT), which is always the
+exact negation — every transaction's postings sum to zero.
+
+Posting amounts are stored debit-normal (assets/expenses positive-for-
+increase, liabilities/income negative-for-increase) so an expense
+category's sign is consistent regardless of which account paid for it. The
+source parsers store liability amounts bank-intuitively instead (a card
+purchase is positive, matching how the statement prints it), so the source
+account's own posting is negated when it's a liability — confirmed as a
+real bug via a credit card purchase producing a *negative* expense-category
+posting while an asset-account withdrawal for the same kind of spend
+produced a positive one. See ledger/schema.sql's v_account_balances and
+v_monthly_income_expense for the display-side flips back to intuitive
+positive numbers for liability balances and income totals.
 
 Runs incrementally: only processes data/processed/*.json files that don't
 already have a sibling *.categorized.json, so re-running the pipeline never
@@ -125,16 +134,40 @@ def _digit_keys(match):
     return {k for k in keys if len(k) >= 6}  # skip anything too short to be a real identifier
 
 
+TRANSFERS_ACCOUNT = "Transfers:Internal"
+
+
 def find_transfer_target(description, own_account_name, matchers):
-    """Returns the other tracked account's name if `description` contains
-    its identifying number, else None."""
+    """Returns TRANSFERS_ACCOUNT if `description` contains another tracked
+    account's identifying number, else None.
+
+    Deliberately a single pseudo-account, not the literal other account —
+    each statement is ingested independently, so a real transfer appears
+    once on each side's own statement (a checking "transfer out" and a
+    credit card "payment in" are two separate rows describing the same real
+    event). Posting the full amount to the literal other account on both
+    sides double-counts it in that account's balance — confirmed against
+    real data: an account picked up thousands of dollars in postings just
+    from being named as someone else's transfer target, on top of its own
+    statement's figures."""
     for entry in matchers:
         if entry["name"] == own_account_name:
             continue
         for key in _digit_keys(entry["match"]):
             if key in re.sub(r"\D", "", description):
-                return entry["name"]
+                return TRANSFERS_ACCOUNT
     return None
+
+
+_ROOT_TYPE_BY_PREFIX = {
+    "Assets": "asset", "Liabilities": "liability", "Income": "income", "Expenses": "expense",
+}
+
+
+def root_type_for(account_name):
+    if account_name == TRANSFERS_ACCOUNT:
+        return "transfer"
+    return _ROOT_TYPE_BY_PREFIX[account_name.split(":", 1)[0]]
 
 
 def categorize_statement(data, rules, matchers, cache):
@@ -172,14 +205,21 @@ def categorize_statement(data, rules, matchers, cache):
             if not any(r["pattern"] == pattern for r in rules):
                 rules.append({"pattern": pattern, "account": account, "source": "llm"})
 
+    own_root_type = root_type_for(own_account)
     output = []
     for item in resolved:
         txn, target = item["txn"], item["target"]
         if target is None:
             target = cache[normalize_description(txn["description"])]
+        # Liability amounts come from the parsers in bank-intuitive form
+        # (a purchase is positive), the opposite of the debit-normal
+        # storage convention every other posting uses — negate so a
+        # liability-funded expense posts the same sign as an asset-funded
+        # one.
+        signed_amount = -txn["amount"] if own_root_type == "liability" else txn["amount"]
         postings = [
-            {"account": own_account, "amount": txn["amount"]},
-            {"account": target, "amount": -txn["amount"]},
+            {"account": own_account, "amount": signed_amount},
+            {"account": target, "amount": -signed_amount},
         ]
         output.append({**txn, "postings": postings})
 

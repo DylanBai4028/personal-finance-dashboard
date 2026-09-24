@@ -8,7 +8,14 @@
 create table accounts (
     id            bigint generated always as identity primary key,
     name          text not null unique,
-    root_type     text not null check (root_type in ('asset', 'liability', 'income', 'expense')),
+    -- 'transfer' is a single pseudo-account ("Transfers:Internal") postings
+    -- land on for a move between two of Dylan's own tracked accounts,
+    -- deliberately not the literal other account — each statement is
+    -- ingested independently, so a real transfer appears once on each
+    -- side's own statement (e.g. a checking "transfer out" and a credit
+    -- card "payment in"), and posting the full amount to the literal other
+    -- account both times double-counts it in that account's balance.
+    root_type     text not null check (root_type in ('asset', 'liability', 'income', 'expense', 'transfer')),
     credit_limit  numeric(12, 2),  -- nullable; only set on liability credit-card accounts
     created_at    timestamptz not null default now()
 );
@@ -44,13 +51,19 @@ create index transactions_date_idx on transactions(date);
 -- Views -----------------------------------------------------------------
 
 -- Current balance per account.
+-- Liability postings are stored debit-normal (spend = negative, payment =
+-- positive) so an expense category's sign is consistent regardless of
+-- whether it was paid from an asset or a liability account — flipped back
+-- to a positive figure here, same reasoning as v_monthly_income_expense's
+-- income flip, so a credit card's balance reads as a normal positive
+-- amount owed rather than a confusing negative number.
 create view v_account_balances as
 select
     a.id as account_id,
     a.name,
     a.root_type,
     a.credit_limit,
-    coalesce(sum(p.amount), 0) as balance
+    case when a.root_type = 'liability' then -coalesce(sum(p.amount), 0) else coalesce(sum(p.amount), 0) end as balance
 from accounts a
 left join postings p on p.account_id = a.id
 group by a.id, a.name, a.root_type, a.credit_limit;
