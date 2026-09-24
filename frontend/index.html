@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Personal Finance Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div>
+      <h1>Personal Finance Dashboard</h1>
+    </div>
+    <div id="sourceBadge" class="source-badge">loading…</div>
+  </div>
+
+  <nav class="tab-nav" id="tabNav" aria-label="Dashboard sections">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="transactions">Transactions</button>
+    <button data-tab="category">Spending by Category</button>
+    <button data-tab="money-flow">Money Flow</button>
+    <button data-tab="accounts">Accounts</button>
+  </nav>
+
+  <!-- OVERVIEW ============================================================ -->
+  <section id="panel-overview" class="tab-panel active">
+    <div class="grid cols-5" id="overviewStats">
+      <div class="card stat-box" id="stat-net-position">
+        <div class="stat-label">Net position</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="stat-spent">
+        <div class="stat-label">Spent this month</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="stat-savings-rate">
+        <div class="stat-label">Savings rate</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="stat-biggest-category">
+        <div class="stat-label">Biggest category</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="stat-largest-txn">
+        <div class="stat-label">Largest transaction</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+    </div>
+
+    <div class="filter-bar" id="overviewFilterBar" style="margin-top:14px;">
+      <span style="font-size:12.5px; color: var(--text-2);">Trend charts:</span>
+      <div class="seg" id="overviewRangeSeg" data-target="overview">
+        <button data-range="this-month">This month</button>
+        <button data-range="last-3-months">Last 3 months</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="last-12-months" class="active">Last 12 months</button>
+        <button data-range="all-time">All time</button>
+      </div>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="card">
+        <h3>Net position over time</h3>
+        <div class="chart-box"><canvas id="chartNetPosition"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Savings rate</h3>
+        <div class="chart-box"><canvas id="chartSavingsRate"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Income vs. expenses</h3>
+        <div class="chart-box"><canvas id="chartIncomeExpense"></canvas></div>
+      </div>
+    </div>
+
+    <h3 class="section-title">Recent transactions</h3>
+    <div class="card">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Account</th><th>Description</th><th>Category</th><th class="amount">Amount</th></tr>
+          </thead>
+          <tbody id="recentTxnBody">
+            <tr><td colspan="5" class="loading-state">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="freshness" id="freshness">&nbsp;</div>
+    </div>
+  </section>
+
+  <!-- TRANSACTIONS ========================================================= -->
+  <section id="panel-transactions" class="tab-panel">
+    <div class="filter-bar" id="txnFilterBar">
+      <div class="seg" id="txnRangeSeg" data-target="transactions">
+        <button data-range="this-month">This month</button>
+        <button data-range="last-3-months" class="active">Last 3 months</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="last-12-months">Last 12 months</button>
+        <button data-range="all-time">All time</button>
+      </div>
+      <select id="txnAccountFilter" multiple aria-label="Account" title="Account (multi-select)"></select>
+      <select id="txnCategoryFilter" aria-label="Category">
+        <option value="">All categories</option>
+      </select>
+      <input type="search" id="txnSearch" placeholder="Search description…" aria-label="Search description" />
+      <div class="amount-range">
+        <input type="number" id="txnAmountMin" placeholder="$min" aria-label="Minimum amount" />
+        <span>–</span>
+        <input type="number" id="txnAmountMax" placeholder="$max" aria-label="Maximum amount" />
+      </div>
+      <div class="spacer"></div>
+      <button class="reset-btn" id="txnResetFilters">Reset filters</button>
+    </div>
+
+    <div class="card">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Account</th><th>Description</th><th>Category</th><th class="amount">Amount</th></tr>
+          </thead>
+          <tbody id="txnTableBody">
+            <tr><td colspan="5" class="loading-state">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination" id="txnPagination"></div>
+    </div>
+  </section>
+
+  <!-- SPENDING BY CATEGORY ================================================= -->
+  <section id="panel-category" class="tab-panel">
+    <div class="filter-bar" id="catFilterBar">
+      <div class="seg" id="catRangeSeg" data-target="category">
+        <button data-range="this-month">This month</button>
+        <button data-range="last-3-months" class="active">Last 3 months</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="last-12-months">Last 12 months</button>
+        <button data-range="all-time">All time</button>
+      </div>
+    </div>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>Category treemap <span class="hint">(click to view transactions)</span></h3>
+        <div id="catTreemap" class="treemap"></div>
+      </div>
+      <div class="card">
+        <h3>Category share</h3>
+        <div class="chart-box"><canvas id="chartCategoryDonut"></canvas></div>
+      </div>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:14px;">
+      <div class="card">
+        <h3>Daily spend — <span id="heatmapMonthLabel"></span></h3>
+        <div id="dailyHeatmap" class="heatmap"></div>
+      </div>
+      <div class="card">
+        <h3>Average spend by weekday</h3>
+        <div class="chart-box"><canvas id="chartWeekday"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h3>Category trend over time</h3>
+      <div class="chart-box" style="height:260px;"><canvas id="chartCategoryTrend"></canvas></div>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:14px;">
+      <div class="card">
+        <h3>Movers vs. prior period</h3>
+        <div id="catMovers" class="bar-list"></div>
+      </div>
+      <div class="card">
+        <h3>Top merchants <span class="hint" id="topMerchantsHint"></span></h3>
+        <div id="topMerchants" class="bar-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MONEY FLOW ============================================================ -->
+  <section id="panel-money-flow" class="tab-panel">
+    <div class="filter-bar" id="flowFilterBar">
+      <label for="flowMonth" style="font-size:12.5px; color:var(--text-2);">Month:</label>
+      <select id="flowMonth" aria-label="Month"></select>
+    </div>
+
+    <div class="card">
+      <h3>Money flow</h3>
+      <div class="chart-box" style="height:340px;"><canvas id="chartSankey"></canvas></div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h3>Cash-flow waterfall</h3>
+      <div class="chart-box"><canvas id="chartWaterfall"></canvas></div>
+    </div>
+  </section>
+
+  <!-- ACCOUNTS ============================================================== -->
+  <section id="panel-accounts" class="tab-panel">
+    <div class="filter-bar" id="acctSelectorBar">
+      <div class="seg" id="acctSelector"></div>
+    </div>
+
+    <div class="grid cols-2" id="acctStats"></div>
+
+    <div class="card" style="margin-top:14px;">
+      <h3>Balance over time</h3>
+      <div class="chart-box"><canvas id="chartAccountBalance"></canvas></div>
+    </div>
+
+    <h3 class="section-title">Transactions on this account</h3>
+    <div class="card">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th></tr>
+          </thead>
+          <tbody id="acctTxnBody">
+            <tr><td colspan="4" class="loading-state">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-sankey@0.14.0/dist/chartjs-chart-sankey.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
