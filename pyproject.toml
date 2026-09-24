@@ -1,0 +1,14 @@
+[project]
+name = "personal-finance-dashboard"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "pdfplumber",
+    "pyyaml",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
