@@ -20,7 +20,6 @@ MONTHS = {
 
 _DAY_RE = re.compile(r"^\d{2}$")
 _AMOUNT_RE = re.compile(r"^-?[\d,]+\.\d{2}$")
-_YEAR_RE = re.compile(r"\b(20\d{2})\b")
 
 # Column right-edges, calibrated against real statements: Withdrawals values
 # (including the literal "blank") land ~x0 360-380; Deposits ~x0 415-460;
@@ -70,16 +69,26 @@ def parse_summary(page1_words):
     }
 
 
+_PERIOD_RE = re.compile(r"\d{2} [A-Z]+ (\d{4}) TO \d{2} [A-Z]+ (\d{4})")
+
+
 def parse_period(page1_text):
     """Extracts the statement period's start/end years from the header line,
     e.g. '05 MAY 2022 TO 05 JULY 2022' -> (2022, 2022). ANZ prints day+month
     only on each transaction row, never a year, so this anchors year
     resolution for statements that don't cross a calendar-year boundary, and
-    seeds it for ones that do."""
-    years = _YEAR_RE.findall(page1_text)
-    if len(years) < 2:
+    seeds it for ones that do.
+
+    Matched against the specific 'DD MONTH YYYY TO DD MONTH YYYY' sentence,
+    not scanned for any '20xx'-shaped number on the page — a real bug found
+    via a real statement: Dylan's own postcode (Darlinghurst NSW 2010) also
+    matches a bare \\b20\\d{2}\\b pattern and, being the last such match on
+    the page, silently became the 'end year', producing a February 29 date
+    in the non-leap year 2010."""
+    match = _PERIOD_RE.search(page1_text)
+    if not match:
         raise ValueError("could not find statement period years on page 1")
-    return int(years[0]), int(years[-1])
+    return int(match.group(1)), int(match.group(2))
 
 
 def _is_transaction_start(row):

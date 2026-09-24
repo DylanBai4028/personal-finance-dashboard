@@ -44,8 +44,14 @@ def _load_account_matchers():
 
 
 def _account_name_for(identified_match, matchers):
+    """`match` is usually a single dict, but can be a list of dicts for an
+    account whose identifying number changed over time (e.g. a card
+    renewal) — confirmed against real data: Dylan's Amex membership number
+    changed between the Jul 2023 and Aug 2023 statements, and every later
+    statement failed to match until this was added."""
     for entry in matchers:
-        if entry["match"] == identified_match:
+        candidates = entry["match"] if isinstance(entry["match"], list) else [entry["match"]]
+        if identified_match in candidates:
             return entry["name"]
     return None
 

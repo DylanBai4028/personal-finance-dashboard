@@ -26,7 +26,7 @@ than parsed to a float, since converting it would mean guessing a locale.
 """
 
 import re
-from datetime import datetime
+from datetime import date, timedelta
 
 MONTHS = [
     "January", "February", "March", "April", "May", "June",
@@ -99,9 +99,23 @@ def parse_summary(page1_text):
     }
 
 
-def _is_transaction_start(row):
-    """A transaction row starts with a month name then a day number, e.g. 'October 16'."""
-    return len(row) >= 2 and row[0]["text"] in MONTHS and row[1]["text"].isdigit()
+def _parse_date_prefix(row):
+    """Returns (month, day, description_words) if `row` starts with a
+    transaction date, else None. Handles both 'October 16' (day as its own
+    word) and 'December20' (day glued onto the month name with no space —
+    confirmed on a real statement, a different font-encoding quirk from the
+    rest of the corpus) shapes."""
+    if not row:
+        return None
+    first = row[0]["text"]
+    if first in MONTHS:
+        if len(row) >= 2 and row[1]["text"].isdigit():
+            return MONTHS.index(first) + 1, int(row[1]["text"]), row[2:]
+        return None
+    for month_name in MONTHS:
+        if first.startswith(month_name) and first[len(month_name):].isdigit():
+            return MONTHS.index(month_name) + 1, int(first[len(month_name):]), row[1:]
+    return None
 
 
 def _section_for(row_text):
@@ -111,21 +125,46 @@ def _section_for(row_text):
     return None
 
 
-def parse_transactions(transaction_pages_words, start_year, end_year):
-    """Parses every transaction row across the statement's transaction pages
-    (all pages after page 1, which is the summary only).
+_PERIOD_BUFFER_DAYS = 5
 
-    Amex prints month + day but never a year per row, and the statement
-    period line itself only carries a year next to its end date (e.g.
-    'September 17 to October 16, 2022') — never the start date. Transactions
-    appear in chronological order, so this starts at start_year and rolls
-    forward to end_year the first time the month decreases (a Dec -> Jan
-    wrap), the same resolution the ANZ deposit-account parser uses.
-    """
+
+def _resolve_year(month, day, start_date, end_date):
+    """Picks whichever of start_date's or end_date's year puts (month, day)
+    inside [start_date, end_date], with a small buffer on each side — a
+    real transaction can be dated a few days before/after the statement's
+    nominal period (settlement lag between the purchase date and the date
+    Amex includes it), confirmed on a real statement where a December 16
+    transaction preceded a "December 17 to January 16" period by one day.
+    5 days is nowhere near the ~365-day gap between the two real candidate
+    years, so it can't create ambiguity between them.
+
+    Not sequential/stateful (no 'roll forward when the month decreases')
+    because Amex doesn't print transactions in one single chronological
+    run — confirmed on a real Dec/Jan-crossing statement where recurring
+    subscription charges (Vodafone, Spotify) were listed out of order at
+    the end of their section, after already-later January dates, which a
+    sequential approach mis-years. Checking each transaction's date
+    against the statement's actual bounds is correct regardless of print
+    order."""
+    buffer = timedelta(days=_PERIOD_BUFFER_DAYS)
+    for year in {start_date.year, end_date.year}:
+        candidate = date(year, month, day)
+        if start_date - buffer <= candidate <= end_date + buffer:
+            return year
+    # Fall back to whichever year is closer, rather than raising — a
+    # transaction dated right at the boundary should never actually reach
+    # here, but this keeps a plausibly-wrong date from crashing the whole
+    # statement over one row.
+    return end_date.year
+
+
+def parse_transactions(transaction_pages_words, start_date, end_date):
+    """Parses every transaction row across the statement's transaction pages
+    (all pages after page 1, which is the summary only). Amex prints month +
+    day but never a year per row; see _resolve_year for how the year is
+    determined."""
     transactions = []
     section = None
-    year = start_year
-    prev_month = None
     for words in transaction_pages_words:
         for row in _cluster_rows(words):
             texts = [w["text"] for w in row]
@@ -139,14 +178,30 @@ def parse_transactions(transaction_pages_words, start_year, end_year):
                 section = None
                 continue
 
-            if not _is_transaction_start(row):
+            if row_text.strip() == "CR":
+                # A standalone 'CR' marker — its own row, the amount column's
+                # baseline drifting from the rest of its transaction's row,
+                # same sub-pixel issue _cluster_rows already works around.
+                # It always means "this line is a credit", overriding
+                # whatever sign its section implied — found on a real
+                # statement: a promotional credit ('David Jones Offer') sat
+                # under the Account Charges section (normally a debit) but
+                # was marked CR, and not forcing it negative broke
+                # reconciliation by exactly double its amount. Force rather
+                # than flip: idempotent if the transaction (e.g. a New
+                # Payments credit) was already negative.
+                if transactions:
+                    transactions[-1]["amount"] = -abs(transactions[-1]["amount"])
+                continue
+
+            date_prefix = _parse_date_prefix(row)
+            if date_prefix is None:
                 continue
             if section is None:
                 raise ValueError(f"transaction row found outside any known section: {row_text!r}")
 
-            month = MONTHS.index(row[0]["text"]) + 1
-            day = int(row[1]["text"])
-            desc_words = [w["text"] for w in row[2:] if w["x0"] < _DESCRIPTION_MAX_X]
+            month, day, rest = date_prefix
+            desc_words = [w["text"] for w in rest if w["x0"] < _DESCRIPTION_MAX_X]
 
             amount = foreign_amount = None
             for w in row:
@@ -161,12 +216,10 @@ def parse_transactions(transaction_pages_words, start_year, end_year):
             if amount is None:
                 raise ValueError(f"transaction row has no Amount ($) value: {row_text!r}")
 
-            if prev_month is not None and month < prev_month:
-                year = end_year
-            prev_month = month
+            year = _resolve_year(month, day, start_date, end_date)
 
             transactions.append({
-                "date": datetime(year, month, day).date(),
+                "date": date(year, month, day),
                 "description": " ".join(desc_words).strip(),
                 "amount": -amount if section == "payment" else amount,
                 "foreign_amount": foreign_amount,
@@ -197,20 +250,24 @@ def reconcile(summary, transactions):
 
 
 def parse_period(page1_text):
-    """Extracts the statement period's start/end years, e.g.
-    'September 17 to October 16, 2022' -> (2022, 2022), or a period crossing
-    a calendar year boundary (e.g. 'December 17 to January 16, 2023') ->
-    (2022, 2023) — inferred from start_month > end_month, since Amex never
-    prints the start date's year explicitly."""
-    match = re.search(r"(\w+) \d{1,2} to (\w+) \d{1,2}, (\d{4})", page1_text)
+    """Extracts the statement period's start/end dates, e.g.
+    'September 17 to October 16, 2022' -> (date(2022,9,17), date(2022,10,16)),
+    or a period crossing a calendar year boundary (e.g. 'December 17 to
+    January 16, 2023') -> (date(2022,12,17), date(2023,1,16)) — the start
+    year is inferred from start_month > end_month, since Amex never prints
+    the start date's year explicitly."""
+    # 'to' and the following month are sometimes glued together with no
+    # space in the extracted text (e.g. 'December 17 toJanuary 16, 2024',
+    # confirmed on a real statement) — \s* rather than a literal space here.
+    match = re.search(r"(\w+) (\d{1,2}) to\s*(\w+) (\d{1,2}), (\d{4})", page1_text)
     if not match:
         raise ValueError("could not find the statement period on page 1")
-    start_month_name, end_month_name, end_year = match.groups()
+    start_month_name, start_day, end_month_name, end_day, end_year = match.groups()
     start_month = MONTHS.index(start_month_name) + 1
     end_month = MONTHS.index(end_month_name) + 1
     end_year = int(end_year)
     start_year = end_year - 1 if start_month > end_month else end_year
-    return start_year, end_year
+    return date(start_year, start_month, int(start_day)), date(end_year, end_month, int(end_day))
 
 
 def parse(pdf):
@@ -218,9 +275,9 @@ def parse(pdf):
     Returns (transactions, ok, reconciliation_details)."""
     page1_text = pdf.pages[0].extract_text() or ""
     summary = parse_summary(page1_text)
-    start_year, end_year = parse_period(page1_text)
+    start_date, end_date = parse_period(page1_text)
 
     transaction_pages_words = [p.extract_words() for p in pdf.pages[1:]]
-    transactions = parse_transactions(transaction_pages_words, start_year, end_year)
+    transactions = parse_transactions(transaction_pages_words, start_date, end_date)
     ok, details = reconcile(summary, transactions)
     return transactions, ok, details
