@@ -1,37 +1,85 @@
-# Same shape as category_rules.local.yaml, with generic patterns instead of
-# Dylan's real merchant history. Committed, and used to categorize
-# src/lib/demo_data_generator.py's synthetic transactions for the public demo
-# — proving the categorization pipeline works, not just the dashboard.
-
 rules:
-  - pattern: "CREDIT INTEREST PAID"
-    account: "Income:Interest"
-    source: manual
-
-  - pattern: "BONUS CREDIT INTEREST PAID"
-    account: "Income:Interest"
-    source: manual
-
-  - pattern: "SALARY"
-    account: "Income:Salary"
-    source: manual
-
-  - pattern: "COLES"
-    account: "Expenses:Food:Groceries"
-    source: manual
-
-  - pattern: "WOOLWORTHS"
-    account: "Expenses:Food:Groceries"
-    source: manual
-
-  - pattern: "UBER EATS"
-    account: "Expenses:Food:Dining"
-    source: manual
-
-  - pattern: "TRANSPORTFORNSW"
-    account: "Expenses:Transport"
-    source: manual
-
-  - pattern: "RENT"
-    account: "Expenses:Housing:Rent"
-    source: manual
+- pattern: CREDIT INTEREST PAID
+  account: Income:Interest
+  source: manual
+- pattern: BONUS CREDIT INTEREST PAID
+  account: Income:Interest
+  source: manual
+- pattern: SALARY
+  account: Income:Salary
+  source: manual
+- pattern: COLES
+  account: Expenses:Food:Groceries
+  source: manual
+- pattern: WOOLWORTHS
+  account: Expenses:Food:Groceries
+  source: manual
+- pattern: UBER EATS
+  account: Expenses:Food:Dining
+  source: manual
+- pattern: TRANSPORTFORNSW
+  account: Expenses:Transport
+  source: manual
+- pattern: RENT
+  account: Expenses:Housing:Rent
+  source: manual
+- pattern: EASY PARKING CBD
+  account: Expenses:Transport
+  source: llm
+- pattern: HARBOUR VIEW HOTEL
+  account: Expenses:Travel
+  source: llm
+- pattern: BAKERY ON MAIN
+  account: Expenses:Food:Dining
+  source: llm
+- pattern: MARGARITA'S TACOS
+  account: Expenses:Food:Dining
+  source: llm
+- pattern: UBER TRIP SYDNEY
+  account: Expenses:Transport
+  source: llm
+- pattern: IGA CORNER STORE
+  account: Expenses:Food:Groceries
+  source: llm
+- pattern: THE CORNER CAFE
+  account: Expenses:Food:Dining
+  source: llm
+- pattern: NOODLE HOUSE SURRY HILLS
+  account: Expenses:Food:Dining
+  source: llm
+- pattern: JB HI-FI CITY
+  account: Expenses:Shopping
+  source: llm
+- pattern: APPLE.COM/BILL
+  account: Expenses:Subscriptions
+  source: llm
+- pattern: NETFLIX.COM
+  account: Expenses:Subscriptions
+  source: llm
+- pattern: CHEMIST WAREHOUSE
+  account: Expenses:Health
+  source: llm
+- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 8573
+  account: Income:Other
+  source: llm
+- pattern: SPOTIFY AU
+  account: Expenses:Subscriptions
+  source: llm
+- pattern: KMART AUSTRALIA
+  account: Expenses:Shopping
+  source: llm
+- pattern: AMAZON AU MARKETPLACE
+  account: Expenses:Shopping
+  source: llm
+- pattern: BUNNINGS WAREHOUSE
+  account: Expenses:Shopping
+  source: llm
+- pattern: ORIGIN ENERGY LTD
+  account: Expenses:Utilities
+  source: llm
+- pattern: SYDNEY WATER
+  account: Expenses:Utilities
+  source: llm
+- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 8787
+  account: Income:Other
+  source: llm

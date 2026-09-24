@@ -26,7 +26,6 @@ import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = ROOT / "data" / "processed"
-CREDIT_LIMIT_STATE = PROCESSED / "_credit_limit_state.json"
 
 _ROOT_TYPE_BY_PREFIX = {
     "Assets": "asset",
@@ -125,14 +124,15 @@ def ensure_accounts(client, account_names):
     return {row["name"]: row["id"] for row in result}
 
 
-def load_credit_limit_state():
-    if CREDIT_LIMIT_STATE.exists():
-        return json.loads(CREDIT_LIMIT_STATE.read_text())
+def load_credit_limit_state(processed_dir):
+    state_path = processed_dir / "_credit_limit_state.json"
+    if state_path.exists():
+        return json.loads(state_path.read_text())
     return {}
 
 
-def save_credit_limit_state(state):
-    CREDIT_LIMIT_STATE.write_text(json.dumps(state, indent=2))
+def save_credit_limit_state(processed_dir, state):
+    (processed_dir / "_credit_limit_state.json").write_text(json.dumps(state, indent=2))
 
 
 def maybe_update_credit_limit(client, data, credit_limit_state):
@@ -181,14 +181,14 @@ def sync_statement(client, data, account_ids):
     client.insert("postings", posting_rows)
 
 
-def sync_all(target):
+def sync_all(target, processed_dir=PROCESSED):
     client = SupabaseClient(target)
-    credit_limit_state = load_credit_limit_state()
+    credit_limit_state = load_credit_limit_state(processed_dir)
 
-    statement_files = sorted(PROCESSED.glob("*.categorized.json"))
+    statement_files = sorted(processed_dir.glob("*.categorized.json"))
     pending = [
         f for f in statement_files
-        if not (PROCESSED / f"{f.stem.removesuffix('.categorized')}.synced").exists()
+        if not (processed_dir / f"{f.stem.removesuffix('.categorized')}.synced").exists()
     ]
 
     if not pending:
@@ -207,18 +207,22 @@ def sync_all(target):
     for json_path, data in parsed:
         sync_statement(client, data, account_ids)
         maybe_update_credit_limit(client, data, credit_limit_state)
-        marker = PROCESSED / f"{json_path.stem.removesuffix('.categorized')}.synced"
+        marker = processed_dir / f"{json_path.stem.removesuffix('.categorized')}.synced"
         marker.write_text("synced\n")
         print(f"synced: {json_path.name} ({len(data['transactions'])} transactions)")
 
-    save_credit_limit_state(credit_limit_state)
+    save_credit_limit_state(processed_dir, credit_limit_state)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True, choices=["personal", "demo"])
+    parser.add_argument(
+        "--processed-dir", type=Path, default=PROCESSED,
+        help="defaults to data/processed — pass data/demo_processed for the demo target",
+    )
     args = parser.parse_args()
-    sync_all(args.target)
+    sync_all(args.target, args.processed_dir)
 
 
 if __name__ == "__main__":

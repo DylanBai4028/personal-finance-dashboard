@@ -101,8 +101,8 @@ def match_rule(description, rules):
     return max(matches, key=lambda r: len(r["pattern"]))
 
 
-def load_account_matchers():
-    data = yaml.safe_load(ACCOUNTS_CONFIG.read_text())
+def load_account_matchers(accounts_path=ACCOUNTS_CONFIG):
+    data = yaml.safe_load(accounts_path.read_text())
     return data["accounts"]
 
 
@@ -189,26 +189,36 @@ def categorize_statement(data, rules, matchers, cache):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rules", required=True, type=Path)
+    parser.add_argument(
+        "--accounts", type=Path, default=ACCOUNTS_CONFIG,
+        help="defaults to rules/accounts.local.yaml — pass rules/accounts.example.yaml for "
+             "the demo target, so transfer detection never checks against real account numbers",
+    )
+    parser.add_argument(
+        "--processed-dir", type=Path, default=PROCESSED,
+        help="defaults to data/processed — pass data/demo_processed for the demo target, "
+             "so synthetic data never shares a directory with real personal data",
+    )
     args = parser.parse_args()
-    run(args.rules)
+    run(args.rules, args.processed_dir, args.accounts)
 
 
-def run(rules_path):
+def run(rules_path, processed_dir=PROCESSED, accounts_path=ACCOUNTS_CONFIG):
     rules = load_rules(rules_path)
-    matchers = load_account_matchers()
+    matchers = load_account_matchers(accounts_path)
     cache = {}
 
     # Exclude categorize_2's own *.categorized.json output and
     # sync_to_supabase_3's _credit_limit_state.json — neither is an
     # ingest_1 statement output, both share this directory.
-    statement_files = sorted(PROCESSED.glob("*.json"))
+    statement_files = sorted(processed_dir.glob("*.json"))
     statement_files = [
         f for f in statement_files
         if not f.name.endswith(".categorized.json") and not f.name.startswith("_")
     ]
 
     for json_path in statement_files:
-        out_path = PROCESSED / f"{json_path.stem}.categorized.json"
+        out_path = processed_dir / f"{json_path.stem}.categorized.json"
         if out_path.exists():
             continue
 
