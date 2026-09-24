@@ -60,6 +60,27 @@ def normalize_description(description):
     return re.sub(r"\s+", " ", _NORMALIZE_RE.sub("#", description)).strip().upper()
 
 
+_BOILERPLATE_RE = re.compile(
+    r"VISA DEBIT PURCHASE CARD \d+\s*"
+    r"|EFTPOS\s*"
+    r"|EFFECTIVE DATE \d{1,2} \w{3} \d{4}"
+    r"|\b\d[\d,]*\.\d{2}\b"
+)
+
+
+def extract_merchant_pattern(description):
+    """Strips the ANZ deposit-account parser's card/amount/date boilerplate
+    (e.g. 'VISA DEBIT PURCHASE CARD 7659 5.50 ... EFFECTIVE DATE 31 JUL 2022')
+    down to the merchant text, so a promoted rule matches every future
+    occurrence of the same merchant, not just this one exact transaction.
+    ANZ credit card and Amex descriptions are already bare merchant text —
+    stripping is a no-op there. Falls back to the raw description if
+    stripping would leave nothing usable (e.g. a P2P payment referencing a
+    person's name, which is inherently a one-off, not a repeat merchant)."""
+    stripped = re.sub(r"\s+", " ", _BOILERPLATE_RE.sub(" ", description)).strip()
+    return stripped if len(stripped) >= 4 else description
+
+
 def load_rules(rules_path):
     if not rules_path.exists():
         return []
@@ -147,7 +168,9 @@ def categorize_statement(data, rules, matchers, cache):
         for key, description in uncached_llm.items():
             account = llm_results[description]
             cache[key] = account
-            rules.append({"pattern": description, "account": account, "source": "llm"})
+            pattern = extract_merchant_pattern(description)
+            if not any(r["pattern"] == pattern for r in rules):
+                rules.append({"pattern": pattern, "account": account, "source": "llm"})
 
     output = []
     for item in resolved:
