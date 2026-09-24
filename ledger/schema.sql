@@ -19,7 +19,13 @@ create table transactions (
     description       text not null,
     source_file       text,  -- provenance: originating statement PDF
     source_page       int,
-    foreign_amount    numeric(12, 2),  -- nullable; Amex foreign-currency spend metadata
+    -- Display-only metadata, never used in arithmetic (the `amount` posting is
+    -- always the AUD amount actually charged). Stored as text, not numeric:
+    -- Amex's Foreign Spend Amount column doesn't always use AUD's
+    -- comma-thousands/dot-decimal format (e.g. '1.239,00' for some European
+    -- currencies), and no currency code is printed per row to know which
+    -- convention applies, so converting it would mean guessing a locale.
+    foreign_amount    text,
     foreign_currency  text,
     created_at        timestamptz not null default now()  -- MAX(created_at) drives the Data Freshness callout
 );
