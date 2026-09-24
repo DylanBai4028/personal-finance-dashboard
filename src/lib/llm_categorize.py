@@ -68,7 +68,10 @@ def _categorize_chunk(descriptions, candidate_accounts):
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=_TIMEOUT_SECONDS, check=True,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "")[:1000]
+        raise RuntimeError(f"claude -p invocation failed: {e}\nstderr: {stderr}") from e
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         raise RuntimeError(f"claude -p invocation failed: {e}") from e
 
     try:
