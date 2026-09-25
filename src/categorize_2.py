@@ -136,10 +136,19 @@ def _digit_keys(match):
 
 TRANSFERS_ACCOUNT = "Transfers:Internal"
 
+# A payment *received* against a tracked credit card (clearing its balance)
+# never contains the paying account's own BSB/account digits — ANZ prints it
+# as "PAYMENT THANKYOU <reference>", a reference number, not an account
+# number, so the digit-matching below can never catch it. Confirmed against
+# real data (2026-09-25): a $13,895.72 card payment was falling through to
+# Expenses:Uncategorized instead of being recognized as a transfer.
+_CARD_PAYMENT_RECEIVED_PATTERNS = ("PAYMENT THANKYOU", "PAYMENT - THANK YOU", "PAYMENT THANK YOU")
+
 
 def find_transfer_target(description, own_account_name, matchers):
     """Returns TRANSFERS_ACCOUNT if `description` contains another tracked
-    account's identifying number, else None.
+    account's identifying number, or matches a known card-payment-received
+    phrasing on a liability account, else None.
 
     Deliberately a single pseudo-account, not the literal other account —
     each statement is ingested independently, so a real transfer appears
@@ -156,6 +165,16 @@ def find_transfer_target(description, own_account_name, matchers):
         for key in _digit_keys(entry["match"]):
             if key in re.sub(r"\D", "", description):
                 return TRANSFERS_ACCOUNT
+
+    # Only for liability (card) accounts — this exact phrasing is
+    # credit-card-statement language for a payment received, not something
+    # a deposit account's own outgoing bill payment would ever say, so
+    # there's no false-positive risk on the paying side's own statement.
+    if root_type_for(own_account_name) == "liability":
+        normalized = description.upper()
+        if any(pattern in normalized for pattern in _CARD_PAYMENT_RECEIVED_PATTERNS):
+            return TRANSFERS_ACCOUNT
+
     return None
 
 
