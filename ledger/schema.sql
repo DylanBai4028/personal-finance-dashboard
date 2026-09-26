@@ -3,7 +3,7 @@
 -- Beancount-style double-entry: every transaction's postings balance to zero.
 -- `accounts` holds both real bank/card accounts and category "accounts"
 -- (Assets:*, Liabilities:*, Income:*, Expenses:*) as colon-separated paths,
--- e.g. 'Assets:ANZ:AccessAdvantage', 'Expenses:Food:Groceries'.
+-- e.g. 'Assets:YourBank:Checking', 'Expenses:Food:Groceries'.
 
 create table accounts (
     id            bigint generated always as identity primary key,

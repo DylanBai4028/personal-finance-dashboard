@@ -35,15 +35,12 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ---------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------
-// Real-account and demo-account labels both live here since this file is
-// shared by both deployments (config.local.js vs config.js picks which
-// Supabase project to query) -- each deployment only ever has its own set
-// of account names in its data, so the unused half of this map is inert.
+// Only the public demo's own (already-fictional) account names are ever
+// hardcoded here, since this file is committed and public -- the personal
+// deployment's real account names must never appear in source, so they
+// fall through to formatAccountName's generic fallback below instead of
+// getting a hardcoded entry.
 const ACCOUNT_LABELS = {
-  "Assets:ANZ:AccessAdvantage": "ANZ Access Advantage",
-  "Assets:ANZ:OnlineSaver": "ANZ Online Saver",
-  "Liabilities:ANZ:FrequentFlyerBlack": "ANZ Frequent Flyer",
-  "Liabilities:Amex:Card": "Amex",
   "Assets:Meridian:Everyday": "Meridian Everyday",
   "Assets:Meridian:Saver": "Meridian Saver",
   "Liabilities:Meridian:TravelRewards": "Meridian Travel Rewards",
@@ -56,7 +53,7 @@ const MONEY_FMT = new Intl.NumberFormat("en-AU", { style: "currency", currency: 
 const MONEY_FMT_PRECISE = new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" });
 
 function formatAccountName(name) {
-  return ACCOUNT_LABELS[name] || (name || "").split(":").pop();
+  return ACCOUNT_LABELS[name] || splitCamelCase((name || "").split(":").pop());
 }
 function splitCamelCase(s) {
   return s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
@@ -1599,10 +1596,21 @@ async function loadAccountsTab() {
   // alike, per the schema's double-entry design. This tab is only about
   // the real tracked accounts, so filter to asset/liability explicitly.
   const all = await fetchAccountBalances();
+  // ACCOUNT_LABELS only ever holds the demo's own (public) account names,
+  // so its key order gives a deliberate display order there -- for any
+  // other deployment (i.e. the personal one, whose real account names are
+  // never hardcoded in this file), fall back to a generic rule: assets
+  // before liabilities, alphabetical within each.
   const knownOrder = Object.keys(ACCOUNT_LABELS);
   acctState.balances = all
     .filter((b) => b.root_type === "asset" || b.root_type === "liability")
-    .sort((a, b) => knownOrder.indexOf(a.name) - knownOrder.indexOf(b.name));
+    .sort((a, b) => {
+      const ai = knownOrder.indexOf(a.name);
+      const bi = knownOrder.indexOf(b.name);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
+      if (a.root_type !== b.root_type) return a.root_type === "asset" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
   if (!acctState.selected || !acctState.balances.some((b) => b.name === acctState.selected)) {
     acctState.selected = acctState.balances[0]?.name || null;
   }

@@ -14,8 +14,18 @@ from collections import defaultdict
 from datetime import date
 
 MONTHS = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
 }
 
 _DAY_RE = re.compile(r"^\d{2}$")
@@ -50,7 +60,7 @@ def _find_summary_value(lines, label_tokens):
     for i, row in enumerate(lines):
         texts = [w["text"] for w in row]
         if all(tok in texts for tok in label_tokens):
-            for next_row in lines[i + 1:i + 5]:
+            for next_row in lines[i + 1 : i + 5]:
                 amounts = [w["text"] for w in next_row if w["text"].startswith("$")]
                 if amounts:
                     return _parse_amount(amounts[-1])
@@ -81,10 +91,10 @@ def parse_period(page1_text):
 
     Matched against the specific 'DD MONTH YYYY TO DD MONTH YYYY' sentence,
     not scanned for any '20xx'-shaped number on the page — a real bug found
-    via a real statement: Dylan's own postcode (Darlinghurst NSW 2010) also
-    matches a bare \\b20\\d{2}\\b pattern and, being the last such match on
-    the page, silently became the 'end year', producing a February 29 date
-    in the non-leap year 2010."""
+    via a real statement: the account holder's own postcode, printed in the
+    address block on page 1, also matches a bare \\b20\\d{2}\\b pattern and,
+    being the last such match on the page, silently became the 'end year',
+    producing a February 29 date in a non-leap year."""
     match = _PERIOD_RE.search(page1_text)
     if not match:
         raise ValueError("could not find statement period years on page 1")
@@ -158,8 +168,7 @@ def parse_transactions(transaction_pages_words, start_year, end_year):
             day = int(row[0]["text"])
             month = MONTHS[row[1]["text"]]
             desc_words = [
-                w["text"] for w in row[2:]
-                if w["x0"] < _WITHDRAWAL_MAX_X and w["text"] != "blank"
+                w["text"] for w in row[2:] if w["x0"] < _WITHDRAWAL_MAX_X and w["text"] != "blank"
             ]
             withdrawal = deposit = balance = None
             for w in row:
@@ -203,12 +212,14 @@ def parse_transactions(transaction_pages_words, start_year, end_year):
         if prev_month is not None and t["month"] < prev_month:
             year = end_year
         prev_month = t["month"]
-        transactions.append({
-            "date": date(year, t["month"], t["day"]),
-            "description": t["description"].strip(),
-            "amount": t["amount"],
-            "balance": t["balance"],
-        })
+        transactions.append(
+            {
+                "date": date(year, t["month"], t["day"]),
+                "description": t["description"].strip(),
+                "amount": t["amount"],
+                "balance": t["balance"],
+            }
+        )
     return transactions
 
 
