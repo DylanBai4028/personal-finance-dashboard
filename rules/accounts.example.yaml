@@ -1,22 +1,23 @@
-# Same shape as accounts.local.yaml, with fake account numbers. This file is
-# committed and used to categorize the public demo's synthetic seed data —
-# see src/lib/demo_data_generator.py.
+# Same shape as accounts.local.yaml, with fake account numbers and a
+# fictional bank/card identity (deliberately not modeled on any specific
+# real institution) — this file is committed and used to categorize the
+# public demo's synthetic seed data. See src/lib/demo_data_generator.py.
 
 accounts:
   - match:
-      bsb: "012-345"
-      account_number: "1234-56789"
-    name: "Assets:ANZ:AccessAdvantage"
+      bsb: "062-000"
+      account_number: "1234-5678"
+    name: "Assets:Meridian:Everyday"
 
   - match:
-      bsb: "012-345"
-      account_number: "9876-54321"
-    name: "Assets:ANZ:OnlineSaver"
+      bsb: "062-000"
+      account_number: "8765-4321"
+    name: "Assets:Meridian:Saver"
 
   - match:
-      account_number: "1111-2222-3333-4444"
-    name: "Liabilities:ANZ:FrequentFlyerBlack"
+      account_number: "5544-9911-2233-9981"
+    name: "Liabilities:Meridian:TravelRewards"
 
   - match:
-      membership_number: "XXXX-XXXXXX-12345"
-    name: "Liabilities:Amex:Card"
+      membership_number: "XXXX-XXXXXX-54321"
+    name: "Liabilities:Voyager:Card"

@@ -35,11 +35,19 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ---------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------
+// Real-account and demo-account labels both live here since this file is
+// shared by both deployments (config.local.js vs config.js picks which
+// Supabase project to query) -- each deployment only ever has its own set
+// of account names in its data, so the unused half of this map is inert.
 const ACCOUNT_LABELS = {
   "Assets:ANZ:AccessAdvantage": "ANZ Access Advantage",
   "Assets:ANZ:OnlineSaver": "ANZ Online Saver",
   "Liabilities:ANZ:FrequentFlyerBlack": "ANZ Frequent Flyer",
   "Liabilities:Amex:Card": "Amex",
+  "Assets:Meridian:Everyday": "Meridian Everyday",
+  "Assets:Meridian:Saver": "Meridian Saver",
+  "Liabilities:Meridian:TravelRewards": "Meridian Travel Rewards",
+  "Liabilities:Voyager:Card": "Voyager Card",
 };
 const CATEGORY_COLORS = ["cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "cat-7", "cat-8"];
 const MONTH_FMT = new Intl.DateTimeFormat("en-AU", { month: "short", year: "2-digit" });
@@ -662,10 +670,18 @@ const txnState = {
   loaded: false,
 };
 
-function populateAccountFilter() {
+// Built from live data, not a static list -- ACCOUNT_LABELS holds both the
+// real and demo deployments' account names in one shared file (see its own
+// comment), so listing straight from it would show the other deployment's
+// accounts as filter options too, none of which exist in this project's data.
+async function populateAccountFilter() {
   const sel = document.getElementById("txnAccountFilter");
-  sel.innerHTML = Object.entries(ACCOUNT_LABELS)
-    .map(([value, label]) => `<option value="${value}">${label}</option>`)
+  const { data, error } = await sb.from("accounts").select("name,root_type").in("root_type", ["asset", "liability"]);
+  if (error) throw error;
+  sel.innerHTML = data
+    .map((r) => r.name)
+    .sort()
+    .map((name) => `<option value="${name}">${formatAccountName(name)}</option>`)
     .join("");
 }
 

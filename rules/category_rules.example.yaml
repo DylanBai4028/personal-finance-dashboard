@@ -14,75 +14,123 @@ rules:
 - pattern: WOOLWORTHS
   account: Expenses:Food:Groceries
   source: manual
+- pattern: IGA CORNER STORE
+  account: Expenses:Food:Groceries
+  source: manual
 - pattern: UBER EATS
   account: Expenses:Food:Dining
+  source: manual
+- pattern: THE CORNER CAFE
+  account: Expenses:Food:Dining
+  source: manual
+- pattern: BAKERY ON MAIN
+  account: Expenses:Food:Dining
+  source: manual
+- pattern: NOODLE HOUSE SURRY HILLS
+  account: Expenses:Food:Dining
+  source: manual
+- pattern: MARGARITA'S TACOS
+  account: Expenses:Food:Dining
+  source: manual
+- pattern: HARBOUR VIEW HOTEL
+  account: Expenses:Travel
   source: manual
 - pattern: TRANSPORTFORNSW
   account: Expenses:Transport
   source: manual
+- pattern: EASY PARKING CBD
+  account: Expenses:Transport
+  source: manual
+- pattern: UBER TRIP
+  account: Expenses:Uber
+  source: manual
 - pattern: RENT
   account: Expenses:Housing:Rent
   source: manual
-- pattern: EASY PARKING CBD
-  account: Expenses:Transport
-  source: llm
-- pattern: HARBOUR VIEW HOTEL
-  account: Expenses:Travel
-  source: llm
-- pattern: BAKERY ON MAIN
-  account: Expenses:Food:Dining
-  source: llm
-- pattern: MARGARITA'S TACOS
-  account: Expenses:Food:Dining
-  source: llm
-- pattern: UBER TRIP SYDNEY
-  account: Expenses:Transport
-  source: llm
-- pattern: IGA CORNER STORE
-  account: Expenses:Food:Groceries
-  source: llm
-- pattern: THE CORNER CAFE
-  account: Expenses:Food:Dining
-  source: llm
-- pattern: NOODLE HOUSE SURRY HILLS
-  account: Expenses:Food:Dining
-  source: llm
 - pattern: JB HI-FI CITY
   account: Expenses:Shopping
-  source: llm
-- pattern: APPLE.COM/BILL
-  account: Expenses:Subscriptions
-  source: llm
-- pattern: NETFLIX.COM
-  account: Expenses:Subscriptions
-  source: llm
-- pattern: CHEMIST WAREHOUSE
-  account: Expenses:Health
-  source: llm
-- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 8573
-  account: Income:Other
-  source: llm
-- pattern: SPOTIFY AU
-  account: Expenses:Subscriptions
-  source: llm
-- pattern: KMART AUSTRALIA
-  account: Expenses:Shopping
-  source: llm
+  source: manual
 - pattern: AMAZON AU MARKETPLACE
   account: Expenses:Shopping
-  source: llm
+  source: manual
+- pattern: KMART AUSTRALIA
+  account: Expenses:Shopping
+  source: manual
 - pattern: BUNNINGS WAREHOUSE
   account: Expenses:Shopping
-  source: llm
+  source: manual
+- pattern: CHEMIST WAREHOUSE
+  account: Expenses:Health
+  source: manual
+- pattern: NETFLIX.COM
+  account: Expenses:Subscriptions
+  source: manual
+- pattern: SPOTIFY AU
+  account: Expenses:Subscriptions
+  source: manual
+- pattern: APPLE.COM/BILL
+  account: Expenses:Subscriptions
+  source: manual
 - pattern: ORIGIN ENERGY LTD
   account: Expenses:Utilities
-  source: llm
+  source: manual
 - pattern: SYDNEY WATER
   account: Expenses:Utilities
-  source: llm
-- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 8787
+  source: manual
+- pattern: BWS
+  account: Expenses:Alcohol
+  source: manual
+- pattern: DAN MURPHY'S
+  account: Expenses:Alcohol
+  source: manual
+- pattern: LIQUORLAND
+  account: Expenses:Alcohol
+  source: manual
+- pattern: FITNESS FIRST
+  account: Expenses:Gym
+  source: manual
+- pattern: ANYTIME FITNESS
+  account: Expenses:Gym
+  source: manual
+- pattern: BARBERSHOP
+  account: Expenses:Haircuts
+  source: manual
+- pattern: BEEM
+  account: Expenses:Beem
+  source: manual
+- pattern: WISE AUSTRALIA
+  account: Transfers:Wise
+  source: manual
+- pattern: FROM ALEX MORGAN
+  account: Transfers:NZ
+  source: manual
+- pattern: TO ALEX MORGAN
+  account: Transfers:Stake
+  source: manual
+- pattern: TO JORDAN NG
+  account: Expenses:TransfersToPeople
+  source: manual
+- pattern: TO PRIYA CHAND
+  account: Expenses:TransfersToPeople
+  source: manual
+- pattern: TO SAM WILSON
+  account: Expenses:TransfersToPeople
+  source: manual
+- pattern: TO VOYAGER CARD
+  account: Transfers:Internal
+  source: manual
+- pattern: CASH ADVANCE FEE
+  account: Expenses:Fees
+  source: manual
+- pattern: EVENT CINEMAS CITY
+  account: Expenses:Entertainment
+  source: manual
+- pattern: ICC SYDNEY TICKETS
+  account: Expenses:Entertainment
+  source: manual
+- pattern: TAX REFUND ATO
   account: Income:Other
-  source: llm
-- pattern: ONLINE PAYMENT RECEIVED - THANKYOU 7570
-  account: Income:Other
-  source: llm
+  source: manual
+- pattern: MISC DEBIT ADJUSTMENT
+  account: Expenses:Uncategorized
+  source: manual
