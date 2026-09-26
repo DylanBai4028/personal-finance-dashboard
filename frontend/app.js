@@ -50,21 +50,28 @@ const MONEY_FMT_PRECISE = new Intl.NumberFormat("en-AU", { style: "currency", cu
 function formatAccountName(name) {
   return ACCOUNT_LABELS[name] || (name || "").split(":").pop();
 }
+function splitCamelCase(s) {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+}
 function formatCategoryName(name) {
   if (!name) return "—";
+  // Only the literal internal pseudo-account collapses to a generic label --
+  // other Transfers:* categories (e.g. Transfers:Wise, Transfers:Stake) are
+  // real, distinct destinations and should show their own name like any
+  // other category.
+  if (name === "Transfers:Internal") return "Transfer";
   const parts = name.split(":");
-  if (parts[0] === "Transfers") return "Transfer";
-  return parts.slice(1).join(" › ") || name;
+  return parts.slice(1).map(splitCamelCase).join(" › ") || name;
 }
 function topLevelCategoryLabel(name) {
   if (!name) return "Uncategorized";
   const parts = name.split(":");
-  return parts[1] || parts[0];
+  return splitCamelCase(parts[1] || parts[0]);
 }
 function leafCategoryLabel(name) {
   if (!name) return "Uncategorized";
   const parts = name.split(":");
-  return parts[parts.length - 1];
+  return splitCamelCase(parts[parts.length - 1]);
 }
 function hashColorVar(key) {
   let h = 0;
@@ -132,6 +139,85 @@ function daysBetween(startIso, endIso) {
 }
 
 // ---------------------------------------------------------------------
+// Shared date-range control — every tab that filters by date uses the same
+// shape of state ({ range: presetKey, customStart, customEnd }) and the
+// same resolver, so "This month" vs. a manually-picked range behaves
+// identically everywhere instead of five slightly different implementations.
+// ---------------------------------------------------------------------
+function resolveRange(state) {
+  if (state.customStart && state.customEnd) return { start: state.customStart, end: state.customEnd };
+  return { start: computeRangeStart(state.range), end: null };
+}
+const PRESET_LABELS = {
+  "this-month": "this month",
+  "last-3-months": "the last 3 months",
+  ytd: "year to date",
+  "last-12-months": "the last 12 months",
+  "all-time": "all time",
+};
+function rangeLabel(state) {
+  if (state.customStart && state.customEnd) {
+    return `${dateLabel(state.customStart)} – ${dateLabel(addDays(state.customEnd, -1))}`;
+  }
+  return PRESET_LABELS[state.range] || state.range;
+}
+
+// Mounts a "start – end [Apply] [Clear]" custom-range control into an empty
+// container next to a tab's existing preset seg buttons. Applying a custom
+// range deactivates the presets (and vice versa) since only one is in
+// effect at a time; `onChange` is called after either.
+function mountCustomRange(containerId, segId, state, onChange) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = `
+    <input type="date" class="cr-start" aria-label="Range start" />
+    <span>–</span>
+    <input type="date" class="cr-end" aria-label="Range end" />
+    <button class="cr-apply">Apply</button>
+    <button class="cr-clear" title="Clear custom range, back to preset">✕</button>
+  `;
+  const startInput = container.querySelector(".cr-start");
+  const endInput = container.querySelector(".cr-end");
+  const applyBtn = container.querySelector(".cr-apply");
+  const clearBtn = container.querySelector(".cr-clear");
+  const seg = document.getElementById(segId);
+
+  applyBtn.addEventListener("click", () => {
+    if (!startInput.value || !endInput.value) return;
+    state.customStart = startInput.value;
+    state.customEnd = addDays(endInput.value, 1); // exclusive upper bound
+    if (seg) seg.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+    container.classList.add("active");
+    onChange();
+  });
+  clearBtn.addEventListener("click", () => {
+    state.customStart = null;
+    state.customEnd = null;
+    startInput.value = "";
+    endInput.value = "";
+    container.classList.remove("active");
+    if (seg) {
+      const fallback = seg.querySelector(`button[data-range="${state.range}"]`) || seg.querySelector("button");
+      seg.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+      fallback.classList.add("active");
+    }
+    onChange();
+  });
+  // Presets and custom range share one "only one active at a time" state —
+  // clicking a preset button clears any applied custom range.
+  if (seg) {
+    seg.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.customStart = null;
+        state.customEnd = null;
+        startInput.value = "";
+        endInput.value = "";
+        container.classList.remove("active");
+      });
+    });
+  }
+}
+
+// ---------------------------------------------------------------------
 // Data fetchers
 // ---------------------------------------------------------------------
 // Supabase/PostgREST caps a single response at 1000 rows by default and
@@ -174,26 +260,31 @@ async function fetchMonthlyIncomeExpense() {
   return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
-async function fetchBiggestCategory(monthStartIso) {
-  const { data, error } = await sb
-    .from("v_monthly_category_totals")
-    .select("category,total")
-    .eq("month", monthStartIso)
-    .order("total", { ascending: false })
-    .limit(1);
-  if (error) throw error;
-  return data[0] || null;
+// Sums v_monthly_category_totals rows falling in [start, end) — the same
+// aggregation loadCategoryTab uses, shared here so the Overview stat boxes
+// and the Category tab agree on what "biggest category in this range" means.
+function aggregateCategoryTotals(monthlyCat, start, end) {
+  const inRange = (m) => (!start || m >= start) && (!end || m < end);
+  const totalsByCategory = new Map();
+  for (const r of monthlyCat.filter((r) => inRange(r.month))) {
+    totalsByCategory.set(r.category, (totalsByCategory.get(r.category) || 0) + Number(r.total));
+  }
+  return [...totalsByCategory.entries()]
+    .map(([category, total]) => ({ category, total }))
+    .filter((c) => c.total > 0)
+    .sort((a, b) => b.total - a.total);
 }
 
-async function fetchLargestTransaction(monthStartIso, nextMonthStartIso) {
-  const { data, error } = await sb
+async function fetchLargestTransaction(start, end) {
+  let query = sb
     .from("postings")
     .select("amount, transactions!inner(date,description), accounts!inner(root_type)")
     .eq("accounts.root_type", "expense")
-    .gte("transactions.date", monthStartIso)
-    .lt("transactions.date", nextMonthStartIso)
     .order("amount", { ascending: false })
     .limit(1);
+  if (start) query = query.gte("transactions.date", start);
+  if (end) query = query.lt("transactions.date", end);
+  const { data, error } = await query;
   if (error) throw error;
   return data[0] || null;
 }
@@ -307,60 +398,81 @@ function buildNetPositionTrend(monthly, netToday) {
 }
 
 // ---------------------------------------------------------------------
-// Overview: stat boxes (always "this month vs last month", independent
-// of the trend-chart range selector below them)
+// Overview: stat boxes AND trend charts share one range control (fixed
+// 2026-09-26 -- the 5 stat boxes were previously hardcoded to "this
+// calendar month vs last", which went blank whenever the real calendar
+// ran ahead of the latest ingested statement, and never responded to the
+// range control sitting right above them).
 // ---------------------------------------------------------------------
-async function renderOverviewStats() {
-  const now = new Date();
-  const thisMonthStart = isoDate(startOfMonth(now));
-  const lastMonthStart = isoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const nextMonthStart = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 1));
-
-  const [balances, monthly, biggestCat, largestTxn, freshness] = await Promise.all([
+async function loadOverviewData() {
+  const [balances, monthly, monthlyCat, freshness] = await Promise.all([
     fetchAccountBalances(),
     fetchMonthlyIncomeExpense(),
-    fetchBiggestCategory(thisMonthStart),
-    fetchLargestTransaction(thisMonthStart, nextMonthStart),
+    fetchMonthlyCategoryTotals(),
     fetchDataFreshness(),
   ]);
-
   const netToday = computeNetPositionToday(balances);
   const trend = buildNetPositionTrend(monthly, netToday);
-  const lastMonthPoint = trend.find((p) => p.month === lastMonthStart);
-  const netDelta = lastMonthPoint ? netToday - lastMonthPoint.net : null;
-  setStat("stat-net-position", money(netToday), deltaSub(netDelta, money, "mo"));
+  document.getElementById("freshness").textContent = freshness
+    ? `Data last ingested: ${new Date(freshness).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}`
+    : "No data ingested yet.";
+  return { balances, monthly, monthlyCat, netToday, trend };
+}
 
-  const thisM = monthly.find((m) => m.month === thisMonthStart) || { income: 0, expense: 0 };
-  const lastM = monthly.find((m) => m.month === lastMonthStart) || { income: 0, expense: 0 };
-  setStat("stat-spent", money(thisM.expense), deltaSub(thisM.expense - lastM.expense, money, "vs last mo", true));
+function sumIncomeExpense(rows) {
+  return rows.reduce((a, m) => ({ income: a.income + (m.income || 0), expense: a.expense + (m.expense || 0) }), { income: 0, expense: 0 });
+}
 
-  const rateNow = thisM.income > 0 ? (thisM.income - thisM.expense) / thisM.income : null;
-  const rateLast = lastM.income > 0 ? (lastM.income - lastM.expense) / lastM.income : null;
+async function renderOverviewStats(cache, state) {
+  const { start, end } = resolveRange(state);
+  const { monthly, monthlyCat, netToday, trend } = cache;
+
+  let netDelta = null;
+  if (start) {
+    const priorMonthKey = addMonths(isoDate(startOfMonth(new Date(start + "T00:00:00"))), -1);
+    const startPoint = trend.find((p) => p.month === priorMonthKey);
+    netDelta = startPoint ? netToday - startPoint.net : null;
+  }
+  setStat("stat-net-position", money(netToday), deltaSub(netDelta, money, `over ${rangeLabel(state)}`));
+
+  const rangeRows = filterByRange(monthly, { start, end });
+  const thisAgg = sumIncomeExpense(rangeRows);
+
+  let prevAgg = null;
+  if (start) {
+    const monthCount = Math.max(rangeRows.length, 1);
+    prevAgg = sumIncomeExpense(filterByRange(monthly, { start: addMonths(start, -monthCount), end: start }));
+  }
+
+  setStat(
+    "stat-spent",
+    money(thisAgg.expense),
+    prevAgg ? deltaSub(thisAgg.expense - prevAgg.expense, money, "vs prior period", true) : " "
+  );
+
+  const rateNow = thisAgg.income > 0 ? (thisAgg.income - thisAgg.expense) / thisAgg.income : null;
+  const rateLast = prevAgg && prevAgg.income > 0 ? (prevAgg.income - prevAgg.expense) / prevAgg.income : null;
   setStat(
     "stat-savings-rate",
     rateNow == null ? "—" : `${(rateNow * 100).toFixed(0)}%`,
     rateNow != null && rateLast != null
-      ? deltaSub((rateNow - rateLast) * 100, (v) => `${v.toFixed(0)}pp`, "vs last mo")
-      : " "
+      ? deltaSub((rateNow - rateLast) * 100, (v) => `${v.toFixed(0)}pp`, "vs prior period")
+      : " "
   );
 
+  const catTotals = aggregateCategoryTotals(monthlyCat, start, end);
   setStat(
     "stat-biggest-category",
-    biggestCat ? formatCategoryName(biggestCat.category) : "—",
-    biggestCat ? money(biggestCat.total) : " "
+    catTotals.length ? formatCategoryName(catTotals[0].category) : "—",
+    catTotals.length ? money(catTotals[0].total) : " "
   );
 
+  const largestTxn = await fetchLargestTransaction(start, end);
   setStat(
     "stat-largest-txn",
     largestTxn ? money(largestTxn.amount) : "—",
-    largestTxn ? largestTxn.transactions.description : " "
+    largestTxn ? largestTxn.transactions.description : " "
   );
-
-  document.getElementById("freshness").textContent = freshness
-    ? `Data last ingested: ${new Date(freshness).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}`
-    : "No data ingested yet.";
-
-  return { balances, monthly, netToday, trend };
 }
 
 function setStat(id, value, sub) {
@@ -400,13 +512,13 @@ function destroyChart(key) {
   }
 }
 
-function filterByRange(monthly, rangeKey) {
-  const start = computeRangeStart(rangeKey);
-  return start ? monthly.filter((m) => m.month >= start) : monthly;
+function filterByRange(monthly, range) {
+  const { start, end } = range;
+  return monthly.filter((m) => (!start || m.month >= start) && (!end || m.month < end));
 }
 
-function renderNetPositionChart(trend, rangeKey) {
-  const rows = filterByRange(trend.map((p) => ({ month: p.month, net: p.net })), rangeKey);
+function renderNetPositionChart(trend, range) {
+  const rows = filterByRange(trend.map((p) => ({ month: p.month, net: p.net })), range);
   const theme = chartTheme();
   destroyChart("netPosition");
   charts.netPosition = new Chart(document.getElementById("chartNetPosition"), {
@@ -428,8 +540,8 @@ function renderNetPositionChart(trend, rangeKey) {
   });
 }
 
-function renderSavingsRateChart(monthly, rangeKey) {
-  const rows = filterByRange(monthly, rangeKey);
+function renderSavingsRateChart(monthly, range) {
+  const rows = filterByRange(monthly, range);
   const theme = chartTheme();
   destroyChart("savingsRate");
   charts.savingsRate = new Chart(document.getElementById("chartSavingsRate"), {
@@ -452,8 +564,8 @@ function renderSavingsRateChart(monthly, rangeKey) {
   });
 }
 
-function renderIncomeExpenseChart(monthly, rangeKey) {
-  const rows = filterByRange(monthly, rangeKey);
+function renderIncomeExpenseChart(monthly, range) {
+  const rows = filterByRange(monthly, range);
   const theme = chartTheme();
   destroyChart("incomeExpense");
   charts.incomeExpense = new Chart(document.getElementById("chartIncomeExpense"), {
@@ -487,10 +599,11 @@ function baseLineOptions(theme, tickFmt) {
   };
 }
 
-async function renderOverviewCharts(rangeKey, cache) {
-  renderNetPositionChart(cache.trend, rangeKey);
-  renderSavingsRateChart(cache.monthly, rangeKey);
-  renderIncomeExpenseChart(cache.monthly, rangeKey);
+async function renderOverviewCharts(cache) {
+  const range = resolveRange(overviewState);
+  renderNetPositionChart(cache.trend, range);
+  renderSavingsRateChart(cache.monthly, range);
+  renderIncomeExpenseChart(cache.monthly, range);
 }
 
 // ---------------------------------------------------------------------
@@ -506,13 +619,22 @@ async function renderRecentTransactions() {
   body.innerHTML = rows.map(txnRowHtml).join("");
 }
 
+// Colors the category pill the same way as the treemap/donut (one hue per
+// top-level category, via hashColorVar) so a category is visually
+// recognizable at a glance in every transaction list, not just the charts.
+function catPillHtml(categoryName) {
+  if (!categoryName) return `<span class="cat-pill">—</span>`;
+  const color = hashColorVar(topLevelCategoryLabel(categoryName));
+  return `<span class="cat-pill" style="background:${color}22; border-color:${color}55; color:${color};">${formatCategoryName(categoryName)}</span>`;
+}
+
 function txnRowHtml(r) {
   const amtCls = r.amount < 0 ? "expense" : "income";
   return `<tr>
     <td>${dateLabel(r.date)}</td>
     <td>${formatAccountName(r.accountName)}</td>
     <td>${escapeHtml(r.description)}</td>
-    <td><span class="cat-pill">${formatCategoryName(r.categoryName)}</span></td>
+    <td>${catPillHtml(r.categoryName)}</td>
     <td class="amount ${amtCls}">${moneyPrecise(r.amount)}</td>
   </tr>`;
 }
@@ -549,7 +671,11 @@ function populateAccountFilter() {
 
 function populateCategoryFilter(rows) {
   const sel = document.getElementById("txnCategoryFilter");
-  const current = sel.value;
+  // Read the authoritative filter state, not the <select>'s current DOM
+  // value -- a drill-down sets txnState.category and rebuilds this list in
+  // the same tick, before the option it wants even exists yet, so reading
+  // sel.value here would silently lose it.
+  const current = txnState.category || sel.value;
   const distinct = [...new Set(rows.map((r) => r.categoryName).filter(Boolean))].sort();
   sel.innerHTML =
     `<option value="">All categories</option>` +
@@ -561,8 +687,7 @@ async function loadTransactionsTab() {
   const body = document.getElementById("txnTableBody");
   body.innerHTML = `<tr><td colspan="5" class="loading-state">Loading…</td></tr>`;
   try {
-    const start = txnState.customStart || computeRangeStart(txnState.range);
-    const end = txnState.customEnd || null;
+    const { start, end } = resolveRange(txnState);
     txnState.allRows = await fetchTransactions({ start, end });
     txnState.loaded = true;
     populateCategoryFilter(txnState.allRows);
@@ -621,11 +746,10 @@ function initTransactionsFilters() {
       document.querySelectorAll("#txnRangeSeg button").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       txnState.range = btn.dataset.range;
-      txnState.customStart = null;
-      txnState.customEnd = null;
       loadTransactionsTab();
     });
   });
+  mountCustomRange("txnCustomRange", "txnRangeSeg", txnState, loadTransactionsTab);
 
   document.getElementById("txnAccountFilter").addEventListener("change", (e) => {
     txnState.accounts = [...e.target.selectedOptions].map((o) => o.value);
@@ -671,16 +795,39 @@ function initTransactionsFilters() {
 // ---------------------------------------------------------------------
 // Shared: drill down from a chart into the Transactions tab
 // ---------------------------------------------------------------------
-function drillToTransactions({ category = null, start = null, end = null } = {}) {
+function drillToTransactions({ category = null, start = null, end = null, search = null } = {}) {
   txnState.accounts = [];
-  txnState.search = "";
+  txnState.search = search || "";
   txnState.minAmount = null;
   txnState.maxAmount = null;
-  txnState.customStart = start;
-  txnState.customEnd = end;
   document.querySelectorAll("#txnRangeSeg button").forEach((b) => b.classList.remove("active"));
+  const crContainer = document.getElementById("txnCustomRange");
+  const crStart = crContainer.querySelector(".cr-start");
+  const crEnd = crContainer.querySelector(".cr-end");
+  if (start) {
+    // Any concrete lower bound becomes an explicit custom range, even one
+    // that came from the source tab's own preset button (whose resolved
+    // range always has `end: null`, open-ended) -- otherwise, with neither
+    // a custom range nor a preset left active, the destination silently
+    // fell back to whatever range the Transactions tab last happened to
+    // be showing instead of the range the user actually drilled in from.
+    const effectiveEnd = end || addDays(isoDate(new Date()), 1);
+    txnState.customStart = start;
+    txnState.customEnd = effectiveEnd;
+    crContainer.classList.add("active");
+    if (crStart) crStart.value = start;
+    if (crEnd) crEnd.value = addDays(effectiveEnd, -1);
+  } else {
+    txnState.customStart = null;
+    txnState.customEnd = null;
+    txnState.range = "all-time";
+    crContainer.classList.remove("active");
+    if (crStart) crStart.value = "";
+    if (crEnd) crEnd.value = "";
+    document.querySelector('#txnRangeSeg button[data-range="all-time"]')?.classList.add("active");
+  }
   document.getElementById("txnAccountFilter").selectedIndex = -1;
-  document.getElementById("txnSearch").value = "";
+  document.getElementById("txnSearch").value = search || "";
   document.getElementById("txnAmountMin").value = "";
   document.getElementById("txnAmountMax").value = "";
   document.getElementById("txnCategoryFilter").value = category || "";
@@ -692,51 +839,64 @@ function drillToTransactions({ category = null, start = null, end = null } = {})
 // ---------------------------------------------------------------------
 // Spending by Category tab
 // ---------------------------------------------------------------------
-const catState = { range: "last-3-months", loaded: false };
+const catState = {
+  range: "last-3-months",
+  customStart: null,
+  customEnd: null,
+  loaded: false,
+  heatmapMonth: null, // null = "not yet navigated", defaults to the most recent month with data
+  dailyAllCache: null, // cached so prev/next month nav doesn't re-fetch
+};
 
 async function loadCategoryTab() {
   catState.loaded = true;
-  const rangeStart = computeRangeStart(catState.range);
+  const { start: rangeStart, end: rangeEnd } = resolveRange(catState);
 
   const [monthlyCat, dailyAll, moversRows] = await Promise.all([
     fetchMonthlyCategoryTotals(),
     fetchDailySpend({}),
     fetchCategoryMovers({ start: rangeStart ? addMonths(rangeStart, -12) : null }),
   ]);
+  catState.dailyAllCache = dailyAll;
 
-  const inRange = (m) => !rangeStart || m >= rangeStart;
+  const inRange = (m) => (!rangeStart || m >= rangeStart) && (!rangeEnd || m < rangeEnd);
   const rangeRows = monthlyCat.filter((r) => inRange(r.month));
-
-  const totalsByCategory = new Map();
-  for (const r of rangeRows) totalsByCategory.set(r.category, (totalsByCategory.get(r.category) || 0) + Number(r.total));
-  const catTotals = [...totalsByCategory.entries()]
-    .map(([category, total]) => ({ category, total }))
-    .filter((c) => c.total > 0)
-    .sort((a, b) => b.total - a.total);
+  const catTotals = aggregateCategoryTotals(monthlyCat, rangeStart, rangeEnd);
 
   renderTreemap(catTotals);
   renderCategoryDonut(catTotals);
   renderCategoryTrendChart(rangeRows);
 
-  const lastDay = dailyAll.length ? dailyAll[dailyAll.length - 1].date : null;
-  const heatmapMonth = lastDay ? isoDate(startOfMonth(new Date(lastDay + "T00:00:00"))) : isoDate(startOfMonth(new Date()));
-  const heatmapNextMonth = addMonths(heatmapMonth, 1);
-  document.getElementById("heatmapMonthLabel").textContent = monthLabel(heatmapMonth);
-  renderHeatmap(
-    dailyAll.filter((d) => d.date >= heatmapMonth && d.date < heatmapNextMonth),
-    heatmapMonth
-  );
+  if (!catState.heatmapMonth) {
+    const lastDay = dailyAll.length ? dailyAll[dailyAll.length - 1].date : null;
+    catState.heatmapMonth = lastDay
+      ? isoDate(startOfMonth(new Date(lastDay + "T00:00:00")))
+      : isoDate(startOfMonth(new Date()));
+  }
+  renderHeatmapMonth();
   renderWeekdayChart(dailyAll.filter((d) => inRange(d.date)));
 
-  renderMovers(moversRows, catState.range, rangeStart);
+  renderMovers(moversRows, catState, rangeStart, rangeEnd);
+  await renderTopMerchants(rangeStart, rangeEnd);
+}
 
-  if (catTotals.length) {
-    const biggest = catTotals[0].category;
-    document.getElementById("topMerchantsHint").textContent = `— ${leafCategoryLabel(biggest)}`;
-    await renderTopMerchants(biggest, rangeStart);
-  } else {
-    document.getElementById("topMerchants").innerHTML = `<div class="empty-state">No spending in this range.</div>`;
-  }
+// The heatmap has its own prev/next month navigation, independent of the
+// tab's overall range filter — a calendar-month grid only ever makes sense
+// for one month at a time, so it stays sticky across range-filter changes
+// rather than jumping back to "most recent" every time.
+function renderHeatmapMonth() {
+  const month = catState.heatmapMonth;
+  const nextMonth = addMonths(month, 1);
+  document.getElementById("heatmapMonthLabel").textContent = monthLabel(month);
+  const dailyAll = catState.dailyAllCache || [];
+  renderHeatmap(
+    dailyAll.filter((d) => d.date >= month && d.date < nextMonth),
+    month
+  );
+  const hasEarlierData = dailyAll.length && dailyAll[0].date < month;
+  const hasLaterData = dailyAll.length && dailyAll[dailyAll.length - 1].date >= nextMonth;
+  document.getElementById("heatmapPrevMonth").disabled = !hasEarlierData;
+  document.getElementById("heatmapNextMonth").disabled = !hasLaterData;
 }
 
 function renderTreemap(items) {
@@ -759,8 +919,8 @@ function renderTreemap(items) {
     .join("");
   container.querySelectorAll(".treemap-tile").forEach((el) => {
     el.addEventListener("click", () => {
-      const rangeStart = computeRangeStart(catState.range);
-      drillToTransactions({ category: el.dataset.category, start: rangeStart });
+      const { start, end } = resolveRange(catState);
+      drillToTransactions({ category: el.dataset.category, start, end });
     });
   });
 }
@@ -949,22 +1109,22 @@ function renderWeekdayChart(dayRows) {
   });
 }
 
-function renderMovers(moversRows, rangeKey, rangeStart) {
+function renderMovers(moversRows, catState, rangeStart, rangeEnd) {
   const container = document.getElementById("catMovers");
-  if (rangeKey === "all-time" || !rangeStart) {
+  if (!rangeStart) {
     container.innerHTML = `<div class="empty-state">Pick a specific range to compare against the prior period.</div>`;
     return;
   }
-  const today = isoDate(new Date());
-  const rangeDays = daysBetween(rangeStart, today);
+  const effectiveEnd = rangeEnd || isoDate(new Date());
+  const rangeDays = daysBetween(rangeStart, effectiveEnd);
   const prevStart = addDays(rangeStart, -rangeDays);
 
   const currentByCat = new Map();
   const prevByCat = new Map();
   for (const r of moversRows) {
     const total = Number(r.total);
-    if (r.date >= rangeStart) currentByCat.set(r.category, (currentByCat.get(r.category) || 0) + total);
-    else if (r.date >= prevStart) prevByCat.set(r.category, (prevByCat.get(r.category) || 0) + total);
+    if (r.date >= rangeStart && r.date < effectiveEnd) currentByCat.set(r.category, (currentByCat.get(r.category) || 0) + total);
+    else if (r.date >= prevStart && r.date < rangeStart) prevByCat.set(r.category, (prevByCat.get(r.category) || 0) + total);
   }
   const categories = new Set([...currentByCat.keys(), ...prevByCat.keys()]);
   const rows = [...categories]
@@ -996,16 +1156,22 @@ function renderMovers(moversRows, rangeKey, rangeStart) {
     .join("");
 }
 
-async function renderTopMerchants(categoryName, rangeStart) {
+// Cumulative spend per merchant across ALL expense categories in the
+// selected range — deliberately not scoped to one category, so recurring
+// merchants (a subscription, a regular cafe) show up regardless of which
+// category they happen to be filed under, per Dylan's "find the common
+// themes" ask (2026-09-25).
+async function renderTopMerchants(rangeStart, rangeEnd) {
   const container = document.getElementById("topMerchants");
   let data;
   try {
     data = await fetchAllRows(() => {
       let query = sb
         .from("postings")
-        .select("amount, transactions!inner(date,description), accounts!inner(name)")
-        .eq("accounts.name", categoryName);
+        .select("amount, transactions!inner(date,description), accounts!inner(root_type)")
+        .eq("accounts.root_type", "expense");
       if (rangeStart) query = query.gte("transactions.date", rangeStart);
+      if (rangeEnd) query = query.lt("transactions.date", rangeEnd);
       return query;
     });
   } catch (error) {
@@ -1020,21 +1186,26 @@ async function renderTopMerchants(categoryName, rangeStart) {
   const rows = [...byMerchant.entries()]
     .map(([name, total]) => ({ name, total }))
     .sort((a, b) => b.total - a.total)
-    .slice(0, 6);
+    .slice(0, 10);
   if (!rows.length) {
-    container.innerHTML = `<div class="empty-state">No transactions in this category yet.</div>`;
+    container.innerHTML = `<div class="empty-state">No spending in this range.</div>`;
     return;
   }
   const max = rows[0].total;
   container.innerHTML = rows
     .map(
-      (r) => `<div class="bl-row">
+      (r, i) => `<div class="bl-row bl-clickable" data-idx="${i}" title="Click to see these transactions">
         <div class="bl-name">${escapeHtml(r.name)}</div>
         <div class="bl-value">${money(r.total)}</div>
         <div class="bl-track"><div class="bl-fill" style="width:${(r.total / max) * 100}%;"></div></div>
       </div>`
     )
     .join("");
+  container.querySelectorAll(".bl-clickable").forEach((el, i) => {
+    el.addEventListener("click", () => {
+      drillToTransactions({ start: rangeStart, end: rangeEnd, search: rows[i].name });
+    });
+  });
 }
 
 function initCategoryFilters() {
@@ -1046,12 +1217,179 @@ function initCategoryFilters() {
       loadCategoryTab();
     });
   });
+  mountCustomRange("catCustomRange", "catRangeSeg", catState, loadCategoryTab);
+
+  document.getElementById("heatmapPrevMonth").addEventListener("click", () => {
+    catState.heatmapMonth = addMonths(catState.heatmapMonth, -1);
+    renderHeatmapMonth();
+  });
+  document.getElementById("heatmapNextMonth").addEventListener("click", () => {
+    catState.heatmapMonth = addMonths(catState.heatmapMonth, 1);
+    renderHeatmapMonth();
+  });
+}
+
+// ---------------------------------------------------------------------
+// Category Deep-Dive tab: pick one category, see it broken into merchant/
+// counterparty sub-groups, ranked by how much of that category's activity
+// each one accounts for.
+// ---------------------------------------------------------------------
+const deepDiveState = { category: "", range: "all-time", customStart: null, customEnd: null, loaded: false };
+
+// Strips per-transaction noise (card/reference numbers, dates, dollar
+// amounts, Beem's opaque per-payment hashes) down to the merchant or
+// counterparty text, so repeat merchants and individuals group together
+// instead of every transaction being its own "merchant" of one. More
+// aggressive than the Python pipeline's extract_merchant_pattern()
+// (categorize_2.py) since that one only has to survive as a rule pattern —
+// this one is what the user actually reads as a group label. Only ever
+// removes text, never reorders it, so the result is guaranteed to still be
+// a literal substring of the original description (safe to reuse as a
+// drill-down search term).
+const _MERCHANT_BOILERPLATE_RE = new RegExp(
+  [
+    "VISA DEBIT PURCHASE CARD \\d+",
+    "VISA DEBIT DEPOSIT",
+    "FUNDS TRANSFER CARD \\d+",
+    "EFTPOS",
+    "ANZ (MOBILE|INTERNET) BANKING PAYMENT \\d+",
+    "EFFECTIVE DATE \\d{1,2} [A-Z]{3} \\d{4}",
+    "REF:[A-Z0-9]+",
+    "\\bW\\d{3,6}\\b",
+    "\\b[0-9a-f]{16,}\\b", // Beem-style opaque recipient hashes
+    "\\b\\d[\\d,]*\\.\\d{2}\\b", // dollar amounts
+    "INC O/S FEE",
+    "\\b(NZD|USD|EUR|GBP)\\b",
+    "\\b\\d{6,}\\b", // long reference numbers
+  ].join("|"),
+  "gi"
+);
+function extractMerchantKey(description) {
+  const stripped = description
+    .replace(_MERCHANT_BOILERPLATE_RE, " ")
+    .replace(/\\+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped.length >= 3 ? stripped : description;
+}
+
+async function populateDeepDiveCategories() {
+  const sel = document.getElementById("deepDiveCategory");
+  const { data, error } = await sb
+    .from("accounts")
+    .select("name,root_type")
+    .neq("root_type", "asset")
+    .neq("root_type", "liability");
+  if (error) throw error;
+  const byRoot = new Map();
+  for (const row of data) {
+    if (!byRoot.has(row.root_type)) byRoot.set(row.root_type, []);
+    byRoot.get(row.root_type).push(row.name);
+  }
+  const order = ["expense", "income", "transfer"];
+  sel.innerHTML = order
+    .filter((rt) => byRoot.has(rt))
+    .map((rt) => {
+      const options = byRoot
+        .get(rt)
+        .sort()
+        .map((name) => `<option value="${name}">${formatCategoryName(name)}</option>`)
+        .join("");
+      return `<optgroup label="${ROOT_TYPE_LABELS[rt]}">${options}</optgroup>`;
+    })
+    .join("");
+  if (!deepDiveState.category && data.length) deepDiveState.category = data.find((r) => r.root_type === "expense")?.name || data[0].name;
+  sel.value = deepDiveState.category;
+}
+
+async function loadDeepDiveTab() {
+  deepDiveState.loaded = true;
+  await populateDeepDiveCategories();
+  await renderDeepDive();
+}
+
+async function renderDeepDive() {
+  const merchantsEl = document.getElementById("deepDiveMerchants");
+  if (!deepDiveState.category) {
+    merchantsEl.innerHTML = `<div class="empty-state">No categories yet.</div>`;
+    return;
+  }
+  merchantsEl.innerHTML = `<div class="loading-state">Loading…</div>`;
+  const { start, end } = resolveRange(deepDiveState);
+  let rows;
+  try {
+    rows = await fetchTransactions({ start, end });
+  } catch (err) {
+    merchantsEl.innerHTML = `<div class="error-state">${escapeHtml(err.message || String(err))}</div>`;
+    return;
+  }
+  const filtered = rows.filter((r) => r.categoryName === deepDiveState.category);
+
+  const total = filtered.reduce((s, r) => s + r.amount, 0);
+  const count = filtered.length;
+  const avgAbs = count ? filtered.reduce((s, r) => s + Math.abs(r.amount), 0) / count : 0;
+
+  const byMerchant = new Map();
+  for (const r of filtered) {
+    const key = extractMerchantKey(r.description);
+    if (!byMerchant.has(key)) byMerchant.set(key, { total: 0, count: 0 });
+    const entry = byMerchant.get(key);
+    entry.total += r.amount;
+    entry.count += 1;
+  }
+
+  setStat("dd-stat-total", moneyPrecise(total), ` `);
+  setStat("dd-stat-count", String(count), ` `);
+  setStat("dd-stat-average", count ? moneyPrecise(avgAbs) : "—", ` `);
+  setStat("dd-stat-merchants", String(byMerchant.size), ` `);
+
+  if (!count) {
+    merchantsEl.innerHTML = `<div class="empty-state">No transactions in this category for the selected range.</div>`;
+    return;
+  }
+
+  const merchantRows = [...byMerchant.entries()]
+    .map(([name, { total, count }]) => ({ name, total, count }))
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
+    .slice(0, 20);
+  const maxAbs = Math.max(...merchantRows.map((r) => Math.abs(r.total)));
+  merchantsEl.innerHTML = merchantRows
+    .map((r, i) => {
+      const dir = r.total < 0 ? "expense" : "income";
+      return `<div class="bl-row bl-clickable" data-idx="${i}" title="Click to see these transactions">
+        <div class="bl-name">${escapeHtml(r.name)} <span class="hint">(${r.count}×)</span></div>
+        <div class="bl-value ${dir}">${moneyPrecise(r.total)}</div>
+        <div class="bl-track"><div class="bl-fill" style="width:${(Math.abs(r.total) / maxAbs) * 100}%;"></div></div>
+      </div>`;
+    })
+    .join("");
+  merchantsEl.querySelectorAll(".bl-clickable").forEach((el, i) => {
+    el.addEventListener("click", () => {
+      drillToTransactions({ category: deepDiveState.category, start, end, search: merchantRows[i].name });
+    });
+  });
+}
+
+function initDeepDiveFilters() {
+  document.querySelectorAll("#deepDiveRangeSeg button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#deepDiveRangeSeg button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      deepDiveState.range = btn.dataset.range;
+      renderDeepDive();
+    });
+  });
+  mountCustomRange("deepDiveCustomRange", "deepDiveRangeSeg", deepDiveState, renderDeepDive);
+  document.getElementById("deepDiveCategory").addEventListener("change", (e) => {
+    deepDiveState.category = e.target.value;
+    renderDeepDive();
+  });
 }
 
 // ---------------------------------------------------------------------
 // Money Flow tab
 // ---------------------------------------------------------------------
-const flowState = { loaded: false, months: [] };
+const flowState = { loaded: false, months: [], customStart: null, customEnd: null };
 
 async function loadMoneyFlowTab() {
   flowState.loaded = true;
@@ -1061,17 +1399,16 @@ async function loadMoneyFlowTab() {
   select.innerHTML = flowState.months.map((m) => `<option value="${m}">${monthLabel(m)}</option>`).join("");
   if (flowState.months.length) {
     select.value = flowState.months[0];
-    await renderMoneyFlowForMonth(flowState.months[0]);
+    await renderMoneyFlowForRange(flowState.months[0], addMonths(flowState.months[0], 1));
   } else {
     document.querySelector("#panel-money-flow .card").innerHTML = `<div class="empty-state">No data yet.</div>`;
   }
 }
 
-async function renderMoneyFlowForMonth(monthStartIso) {
-  const nextMonthStartIso = addMonths(monthStartIso, 1);
-  const rows = await fetchTransactions({ start: monthStartIso, end: nextMonthStartIso });
+async function renderMoneyFlowForRange(start, end) {
+  const rows = await fetchTransactions({ start, end });
   renderSankey(buildSankeyFlows(rows));
-  renderWaterfall(rows, monthStartIso, nextMonthStartIso);
+  renderWaterfall(rows, start, end);
 }
 
 function buildSankeyFlows(rows) {
@@ -1081,6 +1418,12 @@ function buildSankeyFlows(rows) {
     const key = `${from}::${to}`;
     links.set(key, (links.get(key) || 0) + value);
   };
+  // Keyed by transfer category, not just root type — "transfer" now covers
+  // several distinct real-world pools (Transfers:Internal card payments,
+  // Transfers:Wise, Transfers:NZ, Transfers:Stake), each a movement between
+  // two specific places. Pooling them all together would proportionally
+  // attribute, say, part of an NZ-account inflow as if it came from a
+  // credit-card payment, just because both happened in the same period.
   const transferOut = new Map();
   const transferIn = new Map();
 
@@ -1091,14 +1434,20 @@ function buildSankeyFlows(rows) {
     } else if (r.categoryRootType === "expense") {
       add(acct, topLevelCategoryLabel(r.categoryName), Math.abs(r.amount));
     } else if (r.categoryRootType === "transfer") {
-      if (r.amount < 0) transferOut.set(acct, (transferOut.get(acct) || 0) + Math.abs(r.amount));
-      else transferIn.set(acct, (transferIn.get(acct) || 0) + r.amount);
+      const cat = r.categoryName;
+      const bucket = r.amount < 0 ? transferOut : transferIn;
+      if (!bucket.has(cat)) bucket.set(cat, new Map());
+      const byAcct = bucket.get(cat);
+      byAcct.set(acct, (byAcct.get(acct) || 0) + Math.abs(r.amount));
     }
   }
-  const totalIn = [...transferIn.values()].reduce((s, v) => s + v, 0);
-  if (totalIn > 0) {
-    for (const [outAcct, outAmt] of transferOut) {
-      for (const [inAcct, inAmt] of transferIn) {
+  for (const [cat, outByAcct] of transferOut) {
+    const inByAcct = transferIn.get(cat);
+    if (!inByAcct) continue;
+    const totalIn = [...inByAcct.values()].reduce((s, v) => s + v, 0);
+    if (totalIn <= 0) continue;
+    for (const [outAcct, outAmt] of outByAcct) {
+      for (const [inAcct, inAmt] of inByAcct) {
         add(outAcct, inAcct, outAmt * (inAmt / totalIn));
       }
     }
@@ -1143,7 +1492,7 @@ function renderSankey(links) {
   });
 }
 
-function renderWaterfall(rows, monthStartIso, nextMonthStartIso) {
+function renderWaterfall(rows, rangeStart, rangeEnd) {
   const theme = chartTheme();
   destroyChart("waterfall");
   const income = rows.filter((r) => r.categoryRootType === "income").reduce((s, r) => s + r.amount, 0);
@@ -1158,10 +1507,15 @@ function renderWaterfall(rows, monthStartIso, nextMonthStartIso) {
   const otherTotal = sortedCats.slice(4).reduce((s, [, v]) => s + v, 0);
   if (otherTotal > 0) topCats.push(["Other", otherTotal]);
 
-  const openingPoint = overviewCache?.trend?.find((p) => p.month === monthStartIso);
-  const closingPoint = overviewCache?.trend?.find((p) => p.month === nextMonthStartIso);
-  const totalExpense = topCats.reduce((s, [, v]) => s + v, 0);
-  const opening = openingPoint ? openingPoint.net - income + totalExpense : 0;
+  // Opening balance = the net-position trend's closing point for the month
+  // immediately before the range starts — that's exactly the opening
+  // balance for anything starting at the beginning of the next month,
+  // whether the range is one calendar month or several. For a range that
+  // doesn't start on the 1st, this approximates to "as of the start of
+  // that month" rather than the exact day (the trend itself is month-grain).
+  const priorMonthKey = addMonths(isoDate(startOfMonth(new Date(rangeStart + "T00:00:00"))), -1);
+  const openingPoint = overviewCache?.trend?.find((p) => p.month === priorMonthKey);
+  const opening = openingPoint ? openingPoint.net : 0;
 
   const labels = ["Opening"];
   const bars = [[0, opening]];
@@ -1197,13 +1551,31 @@ function renderWaterfall(rows, monthStartIso, nextMonthStartIso) {
 }
 
 function initMoneyFlowFilters() {
-  document.getElementById("flowMonth").addEventListener("change", (e) => renderMoneyFlowForMonth(e.target.value));
+  document.getElementById("flowMonth").addEventListener("change", (e) => {
+    flowState.customStart = null;
+    flowState.customEnd = null;
+    document.getElementById("flowCustomRange").classList.remove("active");
+    renderMoneyFlowForRange(e.target.value, addMonths(e.target.value, 1));
+  });
+  mountCustomRange("flowCustomRange", null, flowState, () => {
+    document.getElementById("flowMonth").selectedIndex = -1;
+    renderMoneyFlowForRange(flowState.customStart, flowState.customEnd);
+  });
 }
 
 // ---------------------------------------------------------------------
 // Accounts tab
 // ---------------------------------------------------------------------
-const acctState = { selected: null, balances: [] };
+const acctState = {
+  selected: null,
+  balances: [],
+  range: "all-time",
+  customStart: null,
+  customEnd: null,
+  page: 1,
+  pageSize: 50,
+  allRows: [],
+};
 
 async function loadAccountsTab() {
   // v_account_balances covers every row in `accounts` — real bank/card
@@ -1298,30 +1670,146 @@ async function renderAccountBalanceChart(bal) {
 async function renderAccountTransactions(accountName) {
   const body = document.getElementById("acctTxnBody");
   body.innerHTML = `<tr><td colspan="4" class="loading-state">Loading…</td></tr>`;
-  const start = computeRangeStart("last-12-months");
-  const rows = (await fetchTransactions({ start })).filter((r) => r.accountName === accountName);
-  if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="4" class="empty-state">No transactions in the last 12 months.</td></tr>`;
-    return;
+  const { start, end } = resolveRange(acctState);
+  const rows = (await fetchTransactions({ start, end })).filter((r) => r.accountName === accountName);
+  acctState.allRows = rows;
+  acctState.page = 1;
+  renderAccountTransactionsTable();
+}
+
+function renderAccountTransactionsTable() {
+  const rows = acctState.allRows;
+  const totalPages = Math.max(1, Math.ceil(rows.length / acctState.pageSize));
+  acctState.page = Math.min(acctState.page, totalPages);
+  const start = (acctState.page - 1) * acctState.pageSize;
+  const pageRows = rows.slice(start, start + acctState.pageSize);
+
+  const body = document.getElementById("acctTxnBody");
+  body.innerHTML = pageRows.length
+    ? pageRows
+        .map((r) => {
+          const amtCls = r.amount < 0 ? "expense" : "income";
+          return `<tr>
+            <td>${dateLabel(r.date)}</td>
+            <td>${escapeHtml(r.description)}</td>
+            <td>${catPillHtml(r.categoryName)}</td>
+            <td class="amount ${amtCls}">${moneyPrecise(r.amount)}</td>
+          </tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="4" class="empty-state">No transactions in this range.</td></tr>`;
+
+  const pagination = document.getElementById("acctPagination");
+  pagination.innerHTML = `
+    <button id="acctPrev" ${acctState.page <= 1 ? "disabled" : ""}>◂ prev</button>
+    <span>page ${acctState.page} of ${totalPages} · ${rows.length} transactions</span>
+    <button id="acctNext" ${acctState.page >= totalPages ? "disabled" : ""}>next ▸</button>
+  `;
+  document.getElementById("acctPrev")?.addEventListener("click", () => {
+    acctState.page -= 1;
+    renderAccountTransactionsTable();
+  });
+  document.getElementById("acctNext")?.addEventListener("click", () => {
+    acctState.page += 1;
+    renderAccountTransactionsTable();
+  });
+}
+
+function initAccountsFilters() {
+  document.querySelectorAll("#acctRangeSeg button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#acctRangeSeg button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      acctState.range = btn.dataset.range;
+      renderAccountTransactions(acctState.selected);
+    });
+  });
+  mountCustomRange("acctCustomRange", "acctRangeSeg", acctState, () => renderAccountTransactions(acctState.selected));
+}
+
+// ---------------------------------------------------------------------
+// Category Definitions tab
+// ---------------------------------------------------------------------
+const definitionsState = { loaded: false };
+
+// Hand-written descriptions for the categories this pipeline's rules/LLM
+// fallback commonly produce, keyed by the category's last path segment
+// (leaf name) since that's what's actually distinctive — "Groceries" means
+// the same thing whether it's Expenses:Food:Groceries or nested differently
+// later. Anything not listed here (a newly LLM-promoted category, or a
+// leaf name not anticipated) gets a generic fallback instead of nothing.
+const CATEGORY_DESCRIPTIONS = {
+  Groceries: "Supermarket and grocery-store spend.",
+  Dining: "Cafes, restaurants, and takeaway.",
+  Rent: "Recurring rent/lease payments.",
+  Transport: "Public transport, rideshare, parking, fuel.",
+  Utilities: "Power, water, gas, internet, phone.",
+  Entertainment: "Bars, events, streaming, leisure activities.",
+  Shopping: "Retail and online purchases outside groceries.",
+  Health: "Medical, pharmacy, fitness.",
+  Travel: "Flights, accommodation, and trip-related spend.",
+  Subscriptions: "Recurring software/media/membership charges.",
+  Fees: "Bank and account fees.",
+  Uncategorized: "No rule or LLM decision matched confidently yet — worth a manual look in rules/category_rules.local.yaml.",
+  Other: "Doesn't fit a more specific category.",
+  Salary: "Regular employment income.",
+  Interest: "Bank-paid interest on deposit accounts.",
+  Internal: "A transfer between two of your own tracked accounts (e.g. paying off a credit card from checking) — nets to zero across the pair, never counted as real income or spending.",
+  Alcohol: "Liquor retailers (bottle shops, cellar doors) — not bar tabs or alcohol on a restaurant bill.",
+  Uber: "Uber rides and carshare — Uber Eats is Dining.",
+  Haircuts: "Barbershop and hairdresser visits.",
+  Gym: "Gym memberships and studio classes.",
+  "Transfers To People": "Paying a friend back for something they covered on your behalf.",
+  Beem: "Peer-to-peer payments via Beem It — splitting bills, both sending and receiving.",
+  NZ: "Money moved between this ledger and your NZ bank account.",
+  Stake: "Money moved into your Stake investing account.",
+  Wise: "Money moved into or out of your Wise multi-currency account.",
+};
+const ROOT_TYPE_LABELS = { income: "Income", expense: "Expenses", transfer: "Transfers" };
+const ROOT_TYPE_NOTES = {
+  income: "Money coming in.",
+  expense: "Money spent, grouped by what it was spent on.",
+  transfer: "Movement between your own tracked accounts — never counted as income or spending.",
+};
+
+async function loadDefinitionsTab() {
+  definitionsState.loaded = true;
+  const container = document.getElementById("definitionsList");
+  try {
+    const { data, error } = await sb.from("accounts").select("name,root_type").neq("root_type", "asset").neq("root_type", "liability");
+    if (error) throw error;
+    const byRoot = new Map();
+    for (const row of data) {
+      if (!byRoot.has(row.root_type)) byRoot.set(row.root_type, []);
+      byRoot.get(row.root_type).push(row.name);
+    }
+    const order = ["income", "expense", "transfer"];
+    container.innerHTML = order
+      .filter((rt) => byRoot.has(rt))
+      .map((rt) => {
+        const names = byRoot.get(rt).sort();
+        const rows = names
+          .map((name) => {
+            const leaf = leafCategoryLabel(name);
+            const desc = CATEGORY_DESCRIPTIONS[leaf] || `Matched under ${escapeHtml(name)} — no written description yet.`;
+            return `<div class="defs-row">
+              <div class="defs-name">${formatCategoryName(name)}</div>
+              <div class="defs-desc">${escapeHtml(desc)}</div>
+            </div>`;
+          })
+          .join("");
+        return `<div class="defs-group-title">${ROOT_TYPE_LABELS[rt]} — ${ROOT_TYPE_NOTES[rt]}</div>${rows}`;
+      })
+      .join("");
+  } catch (err) {
+    container.innerHTML = `<div class="error-state">${escapeHtml(err.message || String(err))}</div>`;
   }
-  body.innerHTML = rows
-    .slice(0, 300)
-    .map((r) => {
-      const amtCls = r.amount < 0 ? "expense" : "income";
-      return `<tr>
-        <td>${dateLabel(r.date)}</td>
-        <td>${escapeHtml(r.description)}</td>
-        <td><span class="cat-pill">${formatCategoryName(r.categoryName)}</span></td>
-        <td class="amount ${amtCls}">${moneyPrecise(r.amount)}</td>
-      </tr>`;
-    })
-    .join("");
 }
 
 // ---------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------
-const TAB_NAMES = ["overview", "transactions", "category", "money-flow", "accounts"];
+const TAB_NAMES = ["overview", "transactions", "category", "deep-dive", "money-flow", "accounts", "definitions"];
 
 function initTabs() {
   document.querySelectorAll("#tabNav button[data-tab]").forEach((btn) => {
@@ -1341,14 +1829,17 @@ function switchTab(name, updateHash = true) {
   if (updateHash) history.replaceState(null, "", `#${name}`);
   if (name === "transactions" && !txnState.loaded) loadTransactionsTab();
   if (name === "category" && !catState.loaded) loadCategoryTab();
+  if (name === "deep-dive" && !deepDiveState.loaded) loadDeepDiveTab();
   if (name === "money-flow" && !flowState.loaded) loadMoneyFlowTab();
   if (name === "accounts" && !acctState.balances.length) loadAccountsTab();
+  if (name === "definitions" && !definitionsState.loaded) loadDefinitionsTab();
 }
 
 // ---------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------
 let overviewCache = null;
+const overviewState = { range: "last-12-months", customStart: null, customEnd: null };
 
 async function init() {
   Chart.defaults.font.family = "DM Sans";
@@ -1356,20 +1847,28 @@ async function init() {
   initTabs();
   initTransactionsFilters();
   initCategoryFilters();
+  initDeepDiveFilters();
   initMoneyFlowFilters();
+  initAccountsFilters();
 
   try {
-    const cache = await renderOverviewStats();
+    const cache = await loadOverviewData();
     overviewCache = cache;
-    await renderOverviewCharts("last-12-months", cache);
+    const refreshOverview = async () => {
+      await renderOverviewStats(cache, overviewState);
+      await renderOverviewCharts(cache);
+    };
     document.querySelectorAll("#overviewRangeSeg button").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.range === "last-12-months");
+      btn.classList.toggle("active", btn.dataset.range === overviewState.range);
       btn.addEventListener("click", () => {
         document.querySelectorAll("#overviewRangeSeg button").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        renderOverviewCharts(btn.dataset.range, cache);
+        overviewState.range = btn.dataset.range;
+        refreshOverview();
       });
     });
+    mountCustomRange("overviewCustomRange", "overviewRangeSeg", overviewState, refreshOverview);
+    await refreshOverview();
     await renderRecentTransactions();
   } catch (err) {
     console.error(err);

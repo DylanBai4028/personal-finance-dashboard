@@ -161,13 +161,47 @@ a { color: var(--accent); }
 }
 .filter-bar .reset-btn:hover { color: var(--text); border-color: var(--text-3); }
 
+/* Custom date range (shared across tabs, markup injected by app.js) -----*/
+.custom-range { display: flex; align-items: center; gap: 4px; }
+.custom-range input[type="date"] { font-size: 12px; padding: 5px 7px; }
+.custom-range .cr-apply, .custom-range .cr-clear {
+  font: inherit; font-size: 12px; background: var(--surface); color: var(--text-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px; cursor: pointer;
+}
+.custom-range .cr-apply:hover, .custom-range .cr-clear:hover { color: var(--text); border-color: var(--text-3); }
+.custom-range.active .cr-apply { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+/* Month navigator (daily-spend heatmap) ----------------------------------*/
+.month-nav { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-2); }
+.month-nav-btn {
+  font: inherit; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 8px; cursor: pointer; color: var(--text);
+}
+.month-nav-btn:hover { border-color: var(--text-3); }
+.month-nav-btn:disabled { opacity: .4; cursor: default; }
+
+/* Category Definitions tab -----------------------------------------------*/
+.defs-intro { font-size: 13px; line-height: 1.6; color: var(--text-2); max-width: 900px; }
+.defs-intro code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 12px; color: var(--accent); }
+.defs-list { display: flex; flex-direction: column; gap: 2px; }
+.defs-group-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--text-3); margin: 14px 0 6px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+.defs-group-title:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.defs-row { display: grid; grid-template-columns: 220px 1fr; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.defs-row .defs-name { font-weight: 600; color: var(--text); }
+.defs-row .defs-desc { color: var(--text-2); }
+.defs-row .defs-source { font-size: 10.5px; color: var(--text-3); margin-left: 6px; font-weight: 400; text-transform: uppercase; }
+
 /* Cards & grid ----------------------------------------------------------*/
 .grid { display: grid; gap: 14px; }
 .grid.cols-5 { grid-template-columns: repeat(5, 1fr); }
+.grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 @media (max-width: 900px) {
-  .grid.cols-5 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-5, .grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
   .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
 }
 
@@ -272,8 +306,12 @@ td.amount.income { color: var(--gain); }
 .bar-list .bl-value { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 .bar-list .bl-value.up { color: var(--loss); }
 .bar-list .bl-value.down { color: var(--gain); }
+.bar-list .bl-value.expense { color: var(--loss); }
+.bar-list .bl-value.income { color: var(--gain); }
 .bar-list .bl-track { grid-column: 1 / -1; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .bar-list .bl-fill { height: 100%; background: var(--accent); border-radius: 999px; }
+.bar-list .bl-clickable { cursor: pointer; border-radius: 6px; padding: 2px 4px; margin: -2px -4px; transition: background .12s; }
+.bar-list .bl-clickable:hover { background: var(--surface-2); }
 
 /* Account selector & stat cards ------------------------------------------*/
 #acctSelector button { font-weight: 500; }

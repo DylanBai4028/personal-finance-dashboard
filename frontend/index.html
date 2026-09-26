@@ -23,8 +23,10 @@
     <button data-tab="overview" class="active">Overview</button>
     <button data-tab="transactions">Transactions</button>
     <button data-tab="category">Spending by Category</button>
+    <button data-tab="deep-dive">Category Deep-Dive</button>
     <button data-tab="money-flow">Money Flow</button>
     <button data-tab="accounts">Accounts</button>
+    <button data-tab="definitions">Category Definitions</button>
   </nav>
 
   <!-- OVERVIEW ============================================================ -->
@@ -36,7 +38,7 @@
         <div class="stat-sub">&nbsp;</div>
       </div>
       <div class="card stat-box" id="stat-spent">
-        <div class="stat-label">Spent this month</div>
+        <div class="stat-label">Spent</div>
         <div class="stat-value">—</div>
         <div class="stat-sub">&nbsp;</div>
       </div>
@@ -58,7 +60,7 @@
     </div>
 
     <div class="filter-bar" id="overviewFilterBar" style="margin-top:14px;">
-      <span style="font-size:12.5px; color: var(--text-2);">Trend charts:</span>
+      <span style="font-size:12.5px; color: var(--text-2);">Range (applies to every callout and chart below):</span>
       <div class="seg" id="overviewRangeSeg" data-target="overview">
         <button data-range="this-month">This month</button>
         <button data-range="last-3-months">Last 3 months</button>
@@ -66,6 +68,7 @@
         <button data-range="last-12-months" class="active">Last 12 months</button>
         <button data-range="all-time">All time</button>
       </div>
+      <div class="custom-range" id="overviewCustomRange"></div>
     </div>
 
     <div class="grid cols-3">
@@ -109,6 +112,7 @@
         <button data-range="last-12-months">Last 12 months</button>
         <button data-range="all-time">All time</button>
       </div>
+      <div class="custom-range" id="txnCustomRange"></div>
       <select id="txnAccountFilter" multiple aria-label="Account" title="Account (multi-select)"></select>
       <select id="txnCategoryFilter" aria-label="Category">
         <option value="">All categories</option>
@@ -148,6 +152,7 @@
         <button data-range="last-12-months">Last 12 months</button>
         <button data-range="all-time">All time</button>
       </div>
+      <div class="custom-range" id="catCustomRange"></div>
     </div>
 
     <div class="grid cols-2">
@@ -163,7 +168,14 @@
 
     <div class="grid cols-2" style="margin-top:14px;">
       <div class="card">
-        <h3>Daily spend — <span id="heatmapMonthLabel"></span></h3>
+        <h3>
+          Daily spend
+          <span class="month-nav">
+            <button id="heatmapPrevMonth" class="month-nav-btn" aria-label="Previous month">◂</button>
+            <span id="heatmapMonthLabel"></span>
+            <button id="heatmapNextMonth" class="month-nav-btn" aria-label="Next month">▸</button>
+          </span>
+        </h3>
         <div id="dailyHeatmap" class="heatmap"></div>
       </div>
       <div class="card">
@@ -183,9 +195,53 @@
         <div id="catMovers" class="bar-list"></div>
       </div>
       <div class="card">
-        <h3>Top merchants <span class="hint" id="topMerchantsHint"></span></h3>
+        <h3>Top merchants <span class="hint">(cumulative spend, all categories, selected range)</span></h3>
         <div id="topMerchants" class="bar-list"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- CATEGORY DEEP-DIVE ==================================================== -->
+  <section id="panel-deep-dive" class="tab-panel">
+    <div class="filter-bar" id="deepDiveFilterBar">
+      <label for="deepDiveCategory" style="font-size:12.5px; color:var(--text-2);">Category:</label>
+      <select id="deepDiveCategory" aria-label="Category"></select>
+      <div class="seg" id="deepDiveRangeSeg" data-target="deep-dive">
+        <button data-range="this-month">This month</button>
+        <button data-range="last-3-months">Last 3 months</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="last-12-months">Last 12 months</button>
+        <button data-range="all-time" class="active">All time</button>
+      </div>
+      <div class="custom-range" id="deepDiveCustomRange"></div>
+    </div>
+
+    <div class="grid cols-4" id="deepDiveStats">
+      <div class="card stat-box" id="dd-stat-total">
+        <div class="stat-label">Total</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="dd-stat-count">
+        <div class="stat-label">Transactions</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="dd-stat-average">
+        <div class="stat-label">Average size</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="card stat-box" id="dd-stat-merchants">
+        <div class="stat-label">Distinct merchants</div>
+        <div class="stat-value">—</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h3>Merchant breakdown <span class="hint">(click to view transactions)</span></h3>
+      <div id="deepDiveMerchants" class="bar-list"></div>
     </div>
   </section>
 
@@ -194,6 +250,8 @@
     <div class="filter-bar" id="flowFilterBar">
       <label for="flowMonth" style="font-size:12.5px; color:var(--text-2);">Month:</label>
       <select id="flowMonth" aria-label="Month"></select>
+      <span style="color:var(--text-3); font-size:12.5px;">or</span>
+      <div class="custom-range" id="flowCustomRange"></div>
     </div>
 
     <div class="card">
@@ -221,6 +279,16 @@
     </div>
 
     <h3 class="section-title">Transactions on this account</h3>
+    <div class="filter-bar" id="acctFilterBar">
+      <div class="seg" id="acctRangeSeg" data-target="accounts">
+        <button data-range="this-month">This month</button>
+        <button data-range="last-3-months">Last 3 months</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="last-12-months">Last 12 months</button>
+        <button data-range="all-time" class="active">All time</button>
+      </div>
+      <div class="custom-range" id="acctCustomRange"></div>
+    </div>
     <div class="card">
       <div class="table-scroll">
         <table>
@@ -231,6 +299,31 @@
             <tr><td colspan="4" class="loading-state">Loading…</td></tr>
           </tbody>
         </table>
+      </div>
+      <div class="pagination" id="acctPagination"></div>
+    </div>
+  </section>
+
+  <!-- CATEGORY DEFINITIONS =================================================== -->
+  <section id="panel-definitions" class="tab-panel">
+    <div class="card">
+      <h3>How categories work</h3>
+      <p class="defs-intro">
+        Every account in this ledger — real bank/card accounts and spending categories alike — is a
+        colon-separated path, e.g. <code>Expenses:Food:Groceries</code> or <code>Assets:ANZ:AccessAdvantage</code>.
+        The first segment is the type (<strong>Assets</strong>, <strong>Liabilities</strong>,
+        <strong>Income</strong>, <strong>Expenses</strong>, or the internal <strong>Transfers</strong>
+        pseudo-type used for money moving between your own tracked accounts). Every transaction is
+        categorized by a rules file first (merchant pattern → category), falling back to an LLM
+        for anything unmatched — a repeat merchant only ever needs that fallback once, then it
+        becomes a rule. <code>source: llm</code> rules stay visibly tagged apart from ones written
+        by hand, so an auto-categorization never silently passes as reviewed.
+      </p>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h3>Categories currently in your data</h3>
+      <div id="definitionsList" class="defs-list">
+        <div class="loading-state">Loading…</div>
       </div>
     </div>
   </section>
