@@ -53,11 +53,27 @@ ACCOUNTS_CONFIG = ROOT / "rules" / "accounts.local.yaml"
 # new `source: llm` rules, but a live ledger needs a reasonable baseline to
 # choose from on day one.
 DEFAULT_CANDIDATE_ACCOUNTS = [
-    "Expenses:Food:Groceries", "Expenses:Food:Dining", "Expenses:Transport",
-    "Expenses:Housing:Rent", "Expenses:Utilities", "Expenses:Entertainment",
-    "Expenses:Shopping", "Expenses:Health", "Expenses:Travel",
-    "Expenses:Subscriptions", "Expenses:Fees", "Expenses:Uncategorized",
-    "Income:Salary", "Income:Interest", "Income:Other",
+    "Expenses:Food:Groceries",
+    "Expenses:Food:Dining",
+    "Expenses:Transport",
+    "Expenses:Housing:Rent",
+    "Expenses:Utilities",
+    "Expenses:Entertainment",
+    "Expenses:Shopping",
+    "Expenses:Health",
+    "Expenses:Travel",
+    "Expenses:Subscriptions",
+    "Expenses:Fees",
+    "Expenses:Alcohol",
+    "Expenses:Uber",
+    "Expenses:Haircuts",
+    "Expenses:Gym",
+    "Expenses:TransfersToPeople",
+    "Expenses:Beem",
+    "Expenses:Uncategorized",
+    "Income:Salary",
+    "Income:Interest",
+    "Income:Other",
 ]
 
 _NORMALIZE_RE = re.compile(r"\d+")
@@ -138,17 +154,72 @@ TRANSFERS_ACCOUNT = "Transfers:Internal"
 
 # A payment *received* against a tracked credit card (clearing its balance)
 # never contains the paying account's own BSB/account digits — ANZ prints it
-# as "PAYMENT THANKYOU <reference>", a reference number, not an account
-# number, so the digit-matching below can never catch it. Confirmed against
-# real data (2026-09-25): a $13,895.72 card payment was falling through to
-# Expenses:Uncategorized instead of being recognized as a transfer.
-_CARD_PAYMENT_RECEIVED_PATTERNS = ("PAYMENT THANKYOU", "PAYMENT - THANK YOU", "PAYMENT THANK YOU")
+# as "PAYMENT THANKYOU <reference>" and Amex as "ONLINE PAYMENT RECEIVED -
+# THANKYOU <reference>", a reference number, not an account number, so the
+# digit-matching below can never catch either. Confirmed against real data:
+# $13,895.72 (ANZ, 2026-09-25) and $84,645.54 across 33 Amex payments
+# (2026-09-26) were both falling through to Expenses:Uncategorized instead
+# of being recognized as transfers.
+_CARD_PAYMENT_RECEIVED_PATTERNS = (
+    "PAYMENT THANKYOU",
+    "PAYMENT - THANK YOU",
+    "PAYMENT THANK YOU",
+    "ONLINE PAYMENT RECEIVED - THANKYOU",
+    "ONLINE PAYMENT RECEIVED THANKYOU",
+)
+
+
+# A cash-advance *transfer* (money moved out of the card to another tracked
+# account) vs. a cash-advance *fee* (a real, small, genuine expense) —
+# "CASH ADVANCE 248046" vs "CASH ADVANCE FEE - MPB". Confirmed against real
+# data: a $14,034.29 transfer was landing in Expenses:Fees.
+def _is_cash_advance_transfer(description):
+    upper = description.upper()
+    return "CASH ADVANCE" in upper and "FEE" not in upper
+
+
+# The deposit-account side of paying off Amex says "PAYMENT $X TO AMERICAN
+# EXPRESS <partially masked number>" — clean brand-name wording, since
+# Amex's own masked membership number can't be digit-matched reliably (see
+# _digit_keys' own comment on this). Confirmed against real data: $91,406.36
+# across 33 payments were landing in Expenses:Uncategorized/Fees.
+_ASSET_SIDE_TRANSFER_PATTERNS = ("TO AMERICAN EXPRESS",)
+
+# ANZ prints its OWN card's number, masked (e.g. "4564XXXXXXXX2091"), on the
+# deposit-account side of a linked-account transfer -- unlike Amex, it gets
+# no brand-name wording. The real full number in accounts.local.yaml doesn't
+# reliably match this (confirmed 2026-09-25: first 4 digits match, last 4
+# don't -- not yet root-caused, possibly a reissued card), so this matches
+# on the first 4 digits only, combined with the surrounding "masked 16-digit
+# card number" shape, which is distinctive enough on its own to not
+# false-positive against unrelated real spending.
+_MASKED_CARD_RE = re.compile(r"(\d{4})X{4,}\d{4}")
+
+
+def _masked_card_prefix_matches(description, matchers):
+    match = _MASKED_CARD_RE.search(re.sub(r"\s+", "", description.upper()))
+    if not match:
+        return False
+    prefix = match.group(1)
+    for entry in matchers:
+        if not entry["name"].startswith("Liabilities"):
+            continue
+        # An account can have more than one `match` entry (e.g. a card
+        # reissued mid-history, both numbers still needing to match past
+        # statements) — accounts.local.yaml stores those as a list.
+        candidates = entry["match"] if isinstance(entry["match"], list) else [entry["match"]]
+        for candidate in candidates:
+            account_number = candidate.get("account_number", "")
+            if re.sub(r"\D", "", account_number).startswith(prefix):
+                return True
+    return False
 
 
 def find_transfer_target(description, own_account_name, matchers):
     """Returns TRANSFERS_ACCOUNT if `description` contains another tracked
-    account's identifying number, or matches a known card-payment-received
-    phrasing on a liability account, else None.
+    account's identifying number, matches a known card-payment-received
+    phrasing on a liability account, or matches a known deposit-account-side
+    transfer phrasing (paying off a card), else None.
 
     Deliberately a single pseudo-account, not the literal other account —
     each statement is ingested independently, so a real transfer appears
@@ -166,25 +237,42 @@ def find_transfer_target(description, own_account_name, matchers):
             if key in re.sub(r"\D", "", description):
                 return TRANSFERS_ACCOUNT
 
-    # Only for liability (card) accounts — this exact phrasing is
-    # credit-card-statement language for a payment received, not something
-    # a deposit account's own outgoing bill payment would ever say, so
-    # there's no false-positive risk on the paying side's own statement.
-    if root_type_for(own_account_name) == "liability":
-        normalized = description.upper()
+    root_type = root_type_for(own_account_name)
+    normalized = description.upper()
+
+    if root_type == "liability":
         if any(pattern in normalized for pattern in _CARD_PAYMENT_RECEIVED_PATTERNS):
+            return TRANSFERS_ACCOUNT
+        if _is_cash_advance_transfer(description):
+            return TRANSFERS_ACCOUNT
+
+    if root_type == "asset":
+        if any(pattern in normalized for pattern in _ASSET_SIDE_TRANSFER_PATTERNS):
+            return TRANSFERS_ACCOUNT
+        if _masked_card_prefix_matches(description, matchers):
             return TRANSFERS_ACCOUNT
 
     return None
 
 
 _ROOT_TYPE_BY_PREFIX = {
-    "Assets": "asset", "Liabilities": "liability", "Income": "income", "Expenses": "expense",
+    "Assets": "asset",
+    "Liabilities": "liability",
+    "Income": "income",
+    "Expenses": "expense",
 }
 
 
 def root_type_for(account_name):
-    if account_name == TRANSFERS_ACCOUNT:
+    # Every "Transfers:*" name is a movement between Dylan's own money pots
+    # (a tracked account, or an external one he still owns outright, like
+    # his NZ bank account or Stake) -- net-worth neutral, so excluded from
+    # Income/Expense views the same way TRANSFERS_ACCOUNT always has been.
+    # Not one single pseudo-account any more: the money-flow Sankey pools
+    # transfer postings PER CATEGORY NAME (see buildSankeyFlows in app.js),
+    # so distinct external destinations get distinct category names without
+    # cross-contaminating each other's flow arrows.
+    if account_name.split(":", 1)[0] == "Transfers":
         return "transfer"
     return _ROOT_TYPE_BY_PREFIX[account_name.split(":", 1)[0]]
 
@@ -249,14 +337,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rules", required=True, type=Path)
     parser.add_argument(
-        "--accounts", type=Path, default=ACCOUNTS_CONFIG,
+        "--accounts",
+        type=Path,
+        default=ACCOUNTS_CONFIG,
         help="defaults to rules/accounts.local.yaml — pass rules/accounts.example.yaml for "
-             "the demo target, so transfer detection never checks against real account numbers",
+        "the demo target, so transfer detection never checks against real account numbers",
     )
     parser.add_argument(
-        "--processed-dir", type=Path, default=PROCESSED,
+        "--processed-dir",
+        type=Path,
+        default=PROCESSED,
         help="defaults to data/processed — pass data/demo_processed for the demo target, "
-             "so synthetic data never shares a directory with real personal data",
+        "so synthetic data never shares a directory with real personal data",
     )
     args = parser.parse_args()
     run(args.rules, args.processed_dir, args.accounts)
@@ -272,7 +364,8 @@ def run(rules_path, processed_dir=PROCESSED, accounts_path=ACCOUNTS_CONFIG):
     # ingest_1 statement output, both share this directory.
     statement_files = sorted(processed_dir.glob("*.json"))
     statement_files = [
-        f for f in statement_files
+        f
+        for f in statement_files
         if not f.name.endswith(".categorized.json") and not f.name.startswith("_")
     ]
 

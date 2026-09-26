@@ -128,8 +128,28 @@ def parse_transactions(transaction_pages_words, start_year, end_year):
     current = None
     for row in rows:
         first_text = row[0]["text"] if row else ""
-        if first_text in ("TOTALS", "Page", "Date"):
-            continue  # per-page subtotal / page footer / repeated header row
+        if first_text == "TOTALS":
+            # Marks the end of that page's transaction rows — nothing after
+            # it belongs to the transaction above it. Real bug found via a
+            # real statement: without this, the "Fee Summary" boilerplate
+            # that follows the final TOTALS AT END OF PERIOD row (fee
+            # disclosure prose, sometimes spanning 1-2 whole pages) was
+            # silently glued onto the last real transaction's description as
+            # if it were a continuation line.
+            #
+            # Must flush `current` into raw_transactions here, exactly like
+            # the _is_transaction_start branch does — a second real bug
+            # caught immediately after the first fix: discarding `current`
+            # by just reassigning it to None (without appending first)
+            # silently dropped the last transaction on every single page,
+            # since appending only happened when a new transaction started
+            # or at the very end of the whole document.
+            if current is not None:
+                raw_transactions.append(current)
+            current = None
+            continue
+        if first_text in ("Page", "Date"):
+            continue  # page footer / repeated header row
 
         if _is_transaction_start(row):
             if current is not None:

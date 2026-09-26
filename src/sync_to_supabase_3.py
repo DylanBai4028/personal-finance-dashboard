@@ -78,8 +78,11 @@ class SupabaseClient:
             return []
         headers = {**self.headers, "Prefer": "resolution=merge-duplicates,return=representation"}
         resp = requests.post(
-            f"{self.base_url}/{table}", headers=headers, params={"on_conflict": on_conflict},
-            json=rows, timeout=30,
+            f"{self.base_url}/{table}",
+            headers=headers,
+            params={"on_conflict": on_conflict},
+            json=rows,
+            timeout=30,
         )
         resp.raise_for_status()
         return resp.json()
@@ -94,16 +97,19 @@ class SupabaseClient:
 
     def patch(self, table, filter_params, body):
         resp = requests.patch(
-            f"{self.base_url}/{table}", headers=self.headers, params=filter_params,
-            json=body, timeout=30,
+            f"{self.base_url}/{table}",
+            headers=self.headers,
+            params=filter_params,
+            json=body,
+            timeout=30,
         )
         resp.raise_for_status()
 
 
 def root_type_for(account_name):
-    if account_name == "Transfers:Internal":
-        return "transfer"
     prefix = account_name.split(":", 1)[0]
+    if prefix == "Transfers":
+        return "transfer"
     if prefix not in _ROOT_TYPE_BY_PREFIX:
         raise ValueError(f"unrecognized account name prefix: {account_name!r}")
     return _ROOT_TYPE_BY_PREFIX[prefix]
@@ -143,7 +149,9 @@ def maybe_update_credit_limit(client, data, credit_limit_state):
     if "credit_limit" not in data:
         return
     account_name = data["account_name"]
-    statement_max_date = max(t["date"] for t in data["transactions"]) if data["transactions"] else None
+    statement_max_date = (
+        max(t["date"] for t in data["transactions"]) if data["transactions"] else None
+    )
     if statement_max_date is None:
         return
     last_applied = credit_limit_state.get(account_name)
@@ -175,11 +183,13 @@ def sync_statement(client, data, account_ids):
     posting_rows = []
     for txn, inserted_row in zip(transactions, inserted):
         for p in txn["postings"]:
-            posting_rows.append({
-                "transaction_id": inserted_row["id"],
-                "account_id": account_ids[p["account"]],
-                "amount": p["amount"],
-            })
+            posting_rows.append(
+                {
+                    "transaction_id": inserted_row["id"],
+                    "account_id": account_ids[p["account"]],
+                    "amount": p["amount"],
+                }
+            )
     client.insert("postings", posting_rows)
 
 
@@ -189,7 +199,8 @@ def sync_all(target, processed_dir=PROCESSED):
 
     statement_files = sorted(processed_dir.glob("*.categorized.json"))
     pending = [
-        f for f in statement_files
+        f
+        for f in statement_files
         if not (processed_dir / f"{f.stem.removesuffix('.categorized')}.synced").exists()
     ]
 
@@ -220,7 +231,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True, choices=["personal", "demo"])
     parser.add_argument(
-        "--processed-dir", type=Path, default=PROCESSED,
+        "--processed-dir",
+        type=Path,
+        default=PROCESSED,
         help="defaults to data/processed — pass data/demo_processed for the demo target",
     )
     args = parser.parse_args()
